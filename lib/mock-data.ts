@@ -5,16 +5,26 @@ export type ConvStatus = "open" | "pending" | "closed";
 export type Trajectory = "Expanding" | "Stable" | "Contracting";
 export type AccountStatus = "Healthy" | "At Risk" | "Trial" | "New";
 
+export interface MessageAttachment {
+  name: string;
+  url: string;
+  contentType: string; // e.g. "image/png", "video/mp4", "application/pdf"
+  width?: number;
+  height?: number;
+}
+
 export interface Message {
   id: string;
   from: "customer" | "agent" | "note";
   text: string;
+  html?: string;        // sanitized HTML from Intercom — render this when available
   time: string;
   read?: boolean;
   language?: string;
   translation?: string;
   author?: string;
   mentions?: string[];
+  attachments?: MessageAttachment[];
 }
 
 export interface CustomerNote {

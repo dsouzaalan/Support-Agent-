@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import { api } from "@/lib/api";
 
 type Tab = "signin" | "signup";
 
@@ -37,7 +38,8 @@ export default function AuthPage() {
 
   const [signInForm, setSignInForm] = useState({ email: "", password: "" });
   const [signUpForm, setSignUpForm] = useState({
-    name: "",
+    firstName: "",
+    lastName: "",
     email: "",
     password: "",
     confirm: "",
@@ -56,16 +58,29 @@ export default function AuthPage() {
       return;
     }
     setLoading(true);
-    await new Promise((r) => setTimeout(r, 800));
-    document.cookie = "auth-session=true; path=/; SameSite=Strict";
-    router.push("/");
+    try {
+      const res = await api.auth.login(signInForm.email, signInForm.password);
+      const authToken: string = res?.data?.authToken;
+      if (!authToken) throw new Error("No auth token received from server.");
+      localStorage.setItem("auth_token", authToken);
+      document.cookie = "auth-session=true; path=/; SameSite=Strict";
+      router.push("/");
+    } catch (err: any) {
+      setError(err.message || "Login failed. Check your credentials.");
+      setLoading(false);
+    }
   }
 
   async function handleSignUp(e: React.FormEvent) {
     e.preventDefault();
     setError("");
-    if (!signUpForm.name || !signUpForm.email || !signUpForm.password || !signUpForm.confirm) {
-      setError("Please fill in all fields.");
+    if (
+      !signUpForm.firstName ||
+      !signUpForm.email ||
+      !signUpForm.password ||
+      !signUpForm.confirm
+    ) {
+      setError("Please fill in all required fields.");
       return;
     }
     if (signUpForm.password !== signUpForm.confirm) {
@@ -77,16 +92,28 @@ export default function AuthPage() {
       return;
     }
     setLoading(true);
-    await new Promise((r) => setTimeout(r, 800));
-    document.cookie = "auth-session=true; path=/; SameSite=Strict";
-    router.push("/");
+    try {
+      const res = await api.auth.signup(
+        signUpForm.firstName,
+        signUpForm.lastName || "",
+        signUpForm.email,
+        signUpForm.password
+      );
+      const authToken: string = res?.data?.authToken;
+      if (!authToken) throw new Error("No auth token received from server.");
+      localStorage.setItem("auth_token", authToken);
+      document.cookie = "auth-session=true; path=/; SameSite=Strict";
+      router.push("/");
+    } catch (err: any) {
+      setError(err.message || "Sign up failed. Please try again.");
+      setLoading(false);
+    }
   }
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background">
       {/* Left branding panel */}
       <div className="hidden lg:flex lg:w-[42%] flex-col justify-between bg-sidebar-bg text-sidebar-bg-foreground p-10 shrink-0">
-        {/* Logo */}
         <div className="flex items-center gap-2.5">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary">
             <Zap className="h-4 w-4 text-primary-foreground" />
@@ -94,7 +121,6 @@ export default function AuthPage() {
           <span className="text-lg font-semibold tracking-tight text-white">ZapMail</span>
         </div>
 
-        {/* Main copy */}
         <div className="space-y-6">
           <div className="space-y-3">
             <h1 className="text-4xl font-bold leading-tight text-white">
@@ -104,7 +130,6 @@ export default function AuthPage() {
               Your AI-powered hub for managing customer conversations, detecting risk, and staying ahead of every issue.
             </p>
           </div>
-
           <ul className="space-y-3">
             {FEATURES.map((f) => (
               <li key={f} className="flex items-center gap-3 text-sm text-white/75">
@@ -115,7 +140,6 @@ export default function AuthPage() {
           </ul>
         </div>
 
-        {/* Footer quote */}
         <p className="text-xs text-white/30">
           &copy; {new Date().getFullYear()} ZapMail, Inc. All rights reserved.
         </p>
@@ -124,7 +148,6 @@ export default function AuthPage() {
       {/* Right form panel */}
       <div className="flex flex-1 items-center justify-center p-6 overflow-y-auto">
         <div className="w-full max-w-[400px] space-y-7">
-          {/* Mobile logo */}
           <div className="flex items-center gap-2 lg:hidden">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
               <Zap className="h-3.5 w-3.5 text-primary-foreground" />
@@ -132,7 +155,6 @@ export default function AuthPage() {
             <span className="text-base font-semibold">ZapMail</span>
           </div>
 
-          {/* Heading */}
           <div className="space-y-1">
             <h2 className="text-2xl font-bold tracking-tight">
               {tab === "signin" ? "Welcome back" : "Create your account"}
@@ -144,7 +166,6 @@ export default function AuthPage() {
             </p>
           </div>
 
-          {/* Tab switcher */}
           <div className="flex rounded-lg border border-border bg-muted p-1 gap-1">
             <button
               onClick={() => handleTabChange("signin")}
@@ -170,7 +191,7 @@ export default function AuthPage() {
             </button>
           </div>
 
-          {/* Sign In form */}
+          {/* Sign In */}
           {tab === "signin" && (
             <form onSubmit={handleSignIn} className="space-y-4">
               <div className="space-y-1.5">
@@ -190,16 +211,7 @@ export default function AuthPage() {
               </div>
 
               <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="si-password">Password</Label>
-                  <button
-                    type="button"
-                    className="text-xs text-primary hover:underline"
-                    tabIndex={-1}
-                  >
-                    Forgot password?
-                  </button>
-                </div>
+                <Label htmlFor="si-password">Password</Label>
                 <div className="relative">
                   <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
                   <Input
@@ -222,17 +234,13 @@ export default function AuthPage() {
                 </div>
               </div>
 
-              {error && (
-                <p className="text-sm text-destructive">{error}</p>
-              )}
+              {error && <p className="text-sm text-destructive">{error}</p>}
 
               <Button type="submit" className="w-full gap-2" disabled={loading}>
                 {loading ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
-                  <>
-                    Sign In <ArrowRight className="h-4 w-4" />
-                  </>
+                  <>Sign In <ArrowRight className="h-4 w-4" /></>
                 )}
               </Button>
 
@@ -249,21 +257,34 @@ export default function AuthPage() {
             </form>
           )}
 
-          {/* Create Account form */}
+          {/* Create Account */}
           {tab === "signup" && (
             <form onSubmit={handleSignUp} className="space-y-4">
-              <div className="space-y-1.5">
-                <Label htmlFor="su-name">Full Name</Label>
-                <div className="relative">
-                  <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="su-fname">First Name</Label>
+                  <div className="relative">
+                    <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+                    <Input
+                      id="su-fname"
+                      type="text"
+                      placeholder="Riley"
+                      className="pl-9"
+                      value={signUpForm.firstName}
+                      onChange={(e) => setSignUpForm((f) => ({ ...f, firstName: e.target.value }))}
+                      autoComplete="given-name"
+                    />
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="su-lname">Last Name</Label>
                   <Input
-                    id="su-name"
+                    id="su-lname"
                     type="text"
-                    placeholder="Riley Park"
-                    className="pl-9"
-                    value={signUpForm.name}
-                    onChange={(e) => setSignUpForm((f) => ({ ...f, name: e.target.value }))}
-                    autoComplete="name"
+                    placeholder="Park"
+                    value={signUpForm.lastName}
+                    onChange={(e) => setSignUpForm((f) => ({ ...f, lastName: e.target.value }))}
+                    autoComplete="family-name"
                   />
                 </div>
               </div>
@@ -332,17 +353,13 @@ export default function AuthPage() {
                 </div>
               </div>
 
-              {error && (
-                <p className="text-sm text-destructive">{error}</p>
-              )}
+              {error && <p className="text-sm text-destructive">{error}</p>}
 
               <Button type="submit" className="w-full gap-2" disabled={loading}>
                 {loading ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
-                  <>
-                    Create Account <ArrowRight className="h-4 w-4" />
-                  </>
+                  <>Create Account <ArrowRight className="h-4 w-4" /></>
                 )}
               </Button>
 
@@ -355,13 +372,6 @@ export default function AuthPage() {
                 >
                   Sign in
                 </button>
-              </p>
-
-              <p className="text-center text-xs text-muted-foreground">
-                By creating an account you agree to our{" "}
-                <span className="text-primary cursor-pointer hover:underline">Terms of Service</span>{" "}
-                and{" "}
-                <span className="text-primary cursor-pointer hover:underline">Privacy Policy</span>.
               </p>
             </form>
           )}

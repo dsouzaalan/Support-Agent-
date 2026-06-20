@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import type { Conversation, ConvStatus, Message } from "@/lib/mock-data";
 import { cannedResponses, helpArticles, suggestedMcp, getMcpResponse } from "@/lib/mock-data";
+import { api } from "@/lib/api";
+import { useAuth } from "@/contexts/AuthContext";
 import {
   Sparkles, SendHorizonal, Wand2, ExternalLink,
   AlertTriangle, CheckCheck, MoreHorizontal, UserPlus, Languages,
@@ -33,7 +35,9 @@ interface ThreadProps {
 }
 
 export function ConversationThread({ conversation, clickupTicket, onLinkClickup, onStatusChange }: ThreadProps) {
+  const { user } = useAuth();
   const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
   const [aiThinking, setAiThinking] = useState(false);
   const [toneCheck, setToneCheck] = useState<null | { tone: string; suggestion: string }>(null);
   const [translatePreview, setTranslatePreview] = useState<null | { lang: string; text: string }>(null);
@@ -71,10 +75,32 @@ export function ConversationThread({ conversation, clickupTicket, onLinkClickup,
     if (lang === AGENT_LANG) return toast(`Customer language matches yours (${LANG_LABELS[lang]}).`);
     setTranslatePreview({ lang, text: `[${LANG_LABELS[lang]} translation] ${draft}` });
   };
-  const send = () => {
-    if (!draft.trim()) return;
-    toast.success(translatePreview ? `Reply sent in ${LANG_LABELS[translatePreview.lang]}.` : `Reply sent to ${conversation.customer.name}.`);
+  const send = async () => {
+    if (!draft.trim() || sending) return;
+    const body = translatePreview ? translatePreview.text : draft.trim();
+    setSending(true);
+    // Optimistic update
+    const optimistic: Message = {
+      id: `opt-${Date.now()}`,
+      from: "agent",
+      text: body,
+      time: new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }),
+      read: true,
+      author: user ? `${user.firstName} ${user.lastName ?? ""}`.trim() : "Agent",
+    };
+    setLocalMessages((prev) => [...prev, optimistic]);
     setDraft(""); setToneCheck(null); setTranslatePreview(null);
+    try {
+      await api.conversations.reply(conversation.id, body, "comment");
+      toast.success(translatePreview ? `Reply sent in ${LANG_LABELS[translatePreview.lang]}.` : `Reply sent to ${conversation.customer.name}.`);
+    } catch (err: any) {
+      toast.error(`Failed to send reply: ${err.message}`);
+      // Rollback optimistic message
+      setLocalMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
+      setDraft(body);
+    } finally {
+      setSending(false);
+    }
   };
   const runMcp = () => {
     if (!suggested) return;
@@ -86,10 +112,28 @@ export function ConversationThread({ conversation, clickupTicket, onLinkClickup,
     setDraft((d) => friendly + d);
     toast.success("MCP results inserted in customer-friendly format");
   };
-  const addNote = () => {
-    if (!noteVal.trim()) return;
-    setLocalMessages([...localMessages, { id: String(Date.now()), from: "note", text: noteVal.trim(), time: "now", author: "Riley Park" }]);
+  const addNote = async () => {
+    if (!noteVal.trim() || sending) return;
+    const body = noteVal.trim();
+    const authorName = user ? `${user.firstName} ${user.lastName ?? ""}`.trim() : "Agent";
+    setSending(true);
+    const optimistic: Message = {
+      id: `note-opt-${Date.now()}`,
+      from: "note",
+      text: body,
+      time: "now",
+      author: authorName,
+    };
+    setLocalMessages((prev) => [...prev, optimistic]);
     setNoteVal(""); setShowNote(false);
+    try {
+      await api.conversations.reply(conversation.id, body, "note");
+    } catch (err: any) {
+      toast.error(`Failed to save note: ${err.message}`);
+      setLocalMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
+    } finally {
+      setSending(false);
+    }
   };
 
   return (
@@ -165,22 +209,31 @@ export function ConversationThread({ conversation, clickupTicket, onLinkClickup,
                 <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-warning">
                   <StickyNote className="h-3 w-3" /> Internal note · {m.author} · {m.time}
                 </div>
-                <p className="mt-1 leading-relaxed text-foreground/85">
-                  {m.text.split(/(\s)/).map((part, i) => part.startsWith("@") ?
-                    <span key={i} className="font-semibold text-primary">{part}</span> : part)}
-                </p>
+                {m.html ? (
+                  <div
+                    className="mt-1 im-body im-body--customer"
+                    dangerouslySetInnerHTML={{ __html: m.html }}
+                  />
+                ) : (
+                  <p className="mt-1 leading-relaxed text-foreground/85">
+                    {m.text.split(/(\s)/).map((part, i) => part.startsWith("@") ?
+                      <span key={i} className="font-semibold text-primary">{part}</span> : part)}
+                  </p>
+                )}
+                <MessageAttachments attachments={m.attachments} isAgent={false} />
               </div>
             );
             const translated = showTranslated[m.id];
             const langDifferent = m.from === "customer" && m.language && m.language !== AGENT_LANG;
+            const isAgent = m.from === "agent";
             return (
-              <div key={m.id} className={cn("flex gap-2.5", m.from === "agent" && "flex-row-reverse")}>
+              <div key={m.id} className={cn("flex gap-2.5", isAgent && "flex-row-reverse")}>
                 <div className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold",
-                  m.from === "customer" ? "bg-gradient-to-br from-primary/80 to-primary text-primary-foreground" : "bg-foreground text-background")}>
-                  {m.from === "customer" ? conversation.customer.initials : "You"}
+                  !isAgent ? "bg-gradient-to-br from-primary/80 to-primary text-primary-foreground" : "bg-foreground text-background")}>
+                  {!isAgent ? conversation.customer.initials : "You"}
                 </div>
                 <div className={cn("max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed",
-                  m.from === "customer" ? "rounded-tl-sm bg-card text-foreground shadow-sm ring-1 ring-border" : "rounded-tr-sm bg-primary text-primary-foreground")}>
+                  !isAgent ? "rounded-tl-sm bg-card text-foreground shadow-sm ring-1 ring-border" : "rounded-tr-sm bg-primary text-primary-foreground")}>
                   {langDifferent && (
                     <div className="mb-1 flex items-center gap-1">
                       <span className="rounded bg-muted px-1.5 py-0 text-[9px] font-semibold uppercase text-muted-foreground">{m.language}</span>
@@ -190,13 +243,21 @@ export function ConversationThread({ conversation, clickupTicket, onLinkClickup,
                       </button>
                     </div>
                   )}
-                  <p>{translated && m.translation ? m.translation : m.text}</p>
+                  {m.html ? (
+                    <div
+                      className={cn("im-body", isAgent ? "im-body--agent" : "im-body--customer")}
+                      dangerouslySetInnerHTML={{ __html: m.html }}
+                    />
+                  ) : (translated && m.translation ? m.translation : m.text) ? (
+                    <LinkifiedText text={translated && m.translation ? m.translation : m.text} isAgent={isAgent} />
+                  ) : null}
                   {translated && m.translation && (
                     <div className="mt-1 text-[10px] italic text-muted-foreground">Translated from {LANG_LABELS[m.language!] || m.language}</div>
                   )}
-                  <div className={cn("mt-1 flex items-center gap-1 text-[10px]", m.from === "customer" ? "text-muted-foreground" : "text-primary-foreground/70")}>
+                  <MessageAttachments attachments={m.attachments} isAgent={isAgent} />
+                  <div className={cn("mt-1 flex items-center gap-1 text-[10px]", !isAgent ? "text-muted-foreground" : "text-primary-foreground/70")}>
                     <span>{m.time}</span>
-                    {m.from === "agent" && m.read && <CheckCheck className="h-3 w-3" />}
+                    {isAgent && m.read && <CheckCheck className="h-3 w-3" />}
                   </div>
                 </div>
               </div>
@@ -277,7 +338,7 @@ export function ConversationThread({ conversation, clickupTicket, onLinkClickup,
               <ComposerBtn onClick={() => setShowNote(true)}><StickyNote className="h-3.5 w-3.5 text-warning" /> Note</ComposerBtn>
               <ComposerBtn onClick={() => toast("Mention @teammate inside a note")}><AtSign className="h-3.5 w-3.5" /></ComposerBtn>
             </div>
-            <button onClick={send} disabled={!draft.trim()}
+            <button onClick={send} disabled={!draft.trim() || sending}
               className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition hover:bg-primary/90 disabled:opacity-40">
               Send <SendHorizonal className="h-3.5 w-3.5" />
             </button>
@@ -356,6 +417,88 @@ ${flags.length ? flags.map((f) => "• " + f).join("\n") : "• No active health
 Conversation link: https://support.zapmail.internal/conversations/${conv.id}`;
 
   return { title, description, category, priority };
+}
+
+// ─── Inline attachment rendering ─────────────────────────────────────────────
+
+import type { MessageAttachment } from "@/lib/mock-data";
+
+function MessageAttachments({ attachments, isAgent }: { attachments?: MessageAttachment[]; isAgent: boolean }) {
+  if (!attachments?.length) return null;
+  return (
+    <div className="mt-2 flex flex-col gap-2">
+      {attachments.map((a, i) => {
+        const ct = a.contentType || "";
+        if (ct.startsWith("image/")) {
+          return (
+            <a key={i} href={a.url} target="_blank" rel="noreferrer" className="block">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={a.url}
+                alt={a.name}
+                className="max-h-64 max-w-full rounded-lg object-contain"
+                style={{ maxWidth: "min(320px, 100%)" }}
+              />
+            </a>
+          );
+        }
+        if (ct.startsWith("video/")) {
+          return (
+            <video key={i} controls className="max-h-48 max-w-full rounded-lg" style={{ maxWidth: "min(320px, 100%)" }}>
+              <source src={a.url} type={ct} />
+              <a href={a.url} target="_blank" rel="noreferrer" className="underline text-xs">
+                {a.name}
+              </a>
+            </video>
+          );
+        }
+        // generic file / PDF / etc.
+        return (
+          <a
+            key={i}
+            href={a.url}
+            target="_blank"
+            rel="noreferrer"
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition",
+              isAgent
+                ? "border-primary-foreground/30 text-primary-foreground hover:bg-primary-foreground/10"
+                : "border-border text-foreground hover:bg-muted"
+            )}
+          >
+            <ExternalLink className="h-3 w-3 shrink-0" />
+            {a.name}
+          </a>
+        );
+      })}
+    </div>
+  );
+}
+
+const URL_RE = /(https?:\/\/[^\s()"<>]+)/g;
+
+function LinkifiedText({ text, isAgent }: { text: string; isAgent: boolean }) {
+  if (!text) return null;
+  const parts = text.split(/(https?:\/\/[^\s()"<>]+)/g);
+  return (
+    <p className="whitespace-pre-wrap break-words">
+      {parts.map((part, i) =>
+        /^https?:\/\//.test(part) ? (
+          <a
+            key={i}
+            href={part}
+            target="_blank"
+            rel="noreferrer"
+            className={cn("underline underline-offset-2 break-all", isAgent ? "text-primary-foreground/90" : "text-primary")}
+          >
+            {part}
+          </a>
+        ) : (
+          part
+        )
+      )}
+    </p>
+  );
 }
 
 function ClickUpModal({ open, onOpenChange, conversation, existingTicket, onCreated }: {

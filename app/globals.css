@@ -3,6 +3,44 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* ── Intercom message body renderer ── */
+.im-body { font-size: 0.875rem; line-height: 1.6; word-break: break-word; }
+.im-body p { margin-bottom: 0.5rem; }
+.im-body p:last-child { margin-bottom: 0; }
+.im-body strong, .im-body b { font-weight: 600; }
+.im-body em, .im-body i { font-style: italic; }
+.im-body u { text-decoration: underline; }
+.im-body s, .im-body strike, .im-body del { text-decoration: line-through; }
+.im-body ul { list-style: disc; padding-left: 1.25rem; margin-bottom: 0.5rem; }
+.im-body ol { list-style: decimal; padding-left: 1.25rem; margin-bottom: 0.5rem; }
+.im-body li { margin-bottom: 0.2rem; }
+.im-body h1,.im-body h2,.im-body h3,.im-body h4,.im-body h5,.im-body h6 { font-weight: 600; margin-bottom: 0.4rem; }
+.im-body h1 { font-size: 1.2em; } .im-body h2 { font-size: 1.1em; } .im-body h3 { font-size: 1em; }
+.im-body blockquote { border-left: 3px solid; padding-left: 0.75rem; opacity: 0.75; margin: 0.5rem 0; font-style: italic; }
+.im-body code { font-family: monospace; font-size: 0.82em; padding: 0.1em 0.35em; border-radius: 4px; }
+.im-body pre { font-family: monospace; font-size: 0.82em; padding: 0.75rem; border-radius: 8px; overflow-x: auto; margin-bottom: 0.5rem; white-space: pre; }
+.im-body pre code { padding: 0; background: none; border-radius: 0; }
+.im-body hr { border: none; border-top: 1px solid; opacity: 0.2; margin: 0.75rem 0; }
+.im-body table { border-collapse: collapse; width: 100%; margin-bottom: 0.5rem; font-size: 0.85em; }
+.im-body th, .im-body td { border: 1px solid; padding: 0.3rem 0.6rem; }
+.im-body th { font-weight: 600; }
+.im-body img { max-width: 100%; border-radius: 8px; margin-top: 4px; display: block; cursor: pointer; max-height: 300px; object-fit: contain; }
+.im-body a { text-decoration: underline; text-underline-offset: 2px; word-break: break-all; }
+
+/* customer bubble (light bg) */
+.im-body--customer a { color: hsl(var(--primary) / 1); }
+.im-body--customer code { background: hsl(var(--muted) / 1); }
+.im-body--customer pre { background: hsl(var(--muted) / 1); }
+.im-body--customer blockquote { border-color: hsl(var(--border) / 1); }
+
+/* agent bubble (primary bg) */
+.im-body--agent { color: hsl(var(--primary-foreground) / 1); }
+.im-body--agent a { color: hsl(var(--primary-foreground) / 0.85); }
+.im-body--agent code { background: hsl(var(--primary-foreground) / 0.15); }
+.im-body--agent pre { background: hsl(var(--primary-foreground) / 0.15); }
+.im-body--agent blockquote { border-color: hsl(var(--primary-foreground) / 0.4); }
+.im-body--agent hr { border-color: hsl(var(--primary-foreground) / 1); }
+
 /*
  * Design system definition.
  *
