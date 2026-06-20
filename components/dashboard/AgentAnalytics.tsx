@@ -16,8 +16,8 @@ export function AgentAnalytics() {
 
   return (
     <div className="flex-1 overflow-y-auto bg-background">
-      <div className="mx-auto max-w-6xl px-8 py-8">
-        <div className="mb-6 flex items-end justify-between">
+      <div className="mx-auto max-w-6xl px-4 py-6 md:px-8 md:py-8">
+        <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">Your performance</h1>
             <p className="mt-1 text-sm text-muted-foreground">How you're doing across conversations, responses, and customer outcomes.</p>

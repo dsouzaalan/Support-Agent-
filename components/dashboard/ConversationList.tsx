@@ -154,8 +154,9 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
 
 function ConvRow({ c, selected, onSelect, clickupTicket }: { c: Conversation; selected: boolean; onSelect: () => void; clickupTicket?: string }) {
   const sentDot = c.customer.sentiment === "negative" ? "bg-danger" : c.customer.sentiment === "neutral" ? "bg-warning" : "bg-success";
-  const waitRatio = c.waitMinutes / c.slaMinutes;
-  const waitTone = waitRatio >= 1 ? "text-danger" : waitRatio >= 0.66 ? "text-warning" : "text-muted-foreground";
+  const isWaiting = c.waitMinutes >= 0;
+  const waitRatio = isWaiting ? c.waitMinutes / c.slaMinutes : 0;
+  const waitTone = !isWaiting ? "text-muted-foreground" : waitRatio >= 1 ? "text-danger" : waitRatio >= 0.66 ? "text-warning" : "text-muted-foreground";
   const closed = c.status === "closed";
   const visibleTags = c.customer.tags.slice(0, 2);
   const extraTags = Math.max(0, c.customer.tags.length - visibleTags.length);
@@ -193,7 +194,7 @@ function ConvRow({ c, selected, onSelect, clickupTicket }: { c: Conversation; se
               <Eye className="h-2.5 w-2.5" />{c.viewers[0]}
             </span>
           )}
-          <span className={cn("ml-auto text-[10px] tabular-nums", waitTone)}>⏱ {c.waitMinutes}m</span>
+          {isWaiting && <span className={cn("ml-auto text-[10px] tabular-nums", waitTone)}>⏱ {c.waitMinutes}m</span>}
         </div>
         <div className="mt-0.5 truncate text-xs text-foreground/70">{c.subject}</div>
         <div className="flex items-center gap-1">

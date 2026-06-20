@@ -26,6 +26,7 @@ import {
   AlertCircle,
   RefreshCw,
   MessageSquare,
+  ChevronLeft,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -47,6 +48,7 @@ export default function Page() {
   const [clickupLinks, setClickupLinks] = useState<Record<string, string>>({});
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [view, setView] = useState<"inbox" | "analytics" | "settings" | "audit">("inbox");
+  const [mobilePanel, setMobilePanel] = useState<"list" | "thread">("list");
 
   // Keep selected ID valid as conversations load
   const effectiveSelectedId =
@@ -118,7 +120,7 @@ export default function Page() {
       <Toaster position="bottom-right" />
 
       {/* Slim app rail */}
-      <nav className="flex h-full w-14 shrink-0 flex-col items-center border-r border-border bg-sidebar-bg py-3 text-sidebar-bg-foreground">
+      <nav className="flex h-full w-12 shrink-0 flex-col items-center border-r border-border bg-sidebar-bg py-3 text-sidebar-bg-foreground md:w-14">
         <div className="mb-4 flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
           <Zap className="h-4 w-4" />
         </div>
@@ -158,14 +160,14 @@ export default function Page() {
       </nav>
 
       {view === "inbox" && (
-        <div className="grid h-full min-w-0 flex-1 grid-cols-[320px_minmax(0,1fr)_360px]">
+        <div className="grid h-full min-w-0 flex-1 grid-cols-1 md:grid-cols-[280px_minmax(0,1fr)] lg:grid-cols-[300px_minmax(0,1fr)_340px]">
           {loading ? (
-            <div className="col-span-3 flex items-center justify-center gap-3 text-muted-foreground">
+            <div className="col-span-full flex items-center justify-center gap-3 text-muted-foreground">
               <Loader2 className="h-5 w-5 animate-spin" />
               <span>Loading conversations…</span>
             </div>
           ) : error ? (
-            <div className="col-span-3 flex flex-col items-center justify-center gap-4 text-muted-foreground">
+            <div className="col-span-full flex flex-col items-center justify-center gap-4 text-muted-foreground">
               <AlertCircle className="h-8 w-8 text-destructive" />
               <p className="text-sm">{error}</p>
               <button
@@ -176,40 +178,60 @@ export default function Page() {
               </button>
             </div>
           ) : conversations.length === 0 ? (
-            <div className="col-span-3 flex items-center justify-center text-muted-foreground text-sm">
+            <div className="col-span-full flex items-center justify-center text-muted-foreground text-sm">
               No conversations found.
             </div>
           ) : (
             <>
-              <ConversationList
-                conversations={conversations}
-                selectedId={effectiveSelectedId ?? ""}
-                onSelect={setSelectedId}
-                agentName={agentName}
-                agentInitials={agentInitials}
-                clickupLinks={clickupLinks}
-              />
-              {convLoading && !selected ? (
-                <div className="col-span-2 flex items-center justify-center gap-2 text-muted-foreground text-sm">
-                  <Loader2 className="h-4 w-4 animate-spin" /> Loading messages…
-                </div>
-              ) : selected ? (
-                <>
+              {/* Conversation list — hidden on mobile when thread is open */}
+              <div className={cn("h-full overflow-hidden", mobilePanel === "thread" ? "hidden md:block" : "block")}>
+                <ConversationList
+                  conversations={conversations}
+                  selectedId={effectiveSelectedId ?? ""}
+                  onSelect={(id) => { setSelectedId(id); setMobilePanel("thread"); }}
+                  agentName={agentName}
+                  agentInitials={agentInitials}
+                  clickupLinks={clickupLinks}
+                />
+              </div>
+
+              {/* Thread area — hidden on mobile when list is shown */}
+              <div className={cn("flex h-full min-w-0 flex-col overflow-hidden", mobilePanel === "list" ? "hidden md:flex" : "flex")}>
+                {/* Mobile back button */}
+                <button
+                  onClick={() => setMobilePanel("list")}
+                  className="md:hidden flex shrink-0 items-center gap-1.5 border-b border-border bg-card px-3 py-2 text-sm text-muted-foreground hover:text-foreground"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  Conversations
+                </button>
+
+                {convLoading && !selected ? (
+                  <div className="flex flex-1 items-center justify-center gap-2 text-muted-foreground text-sm">
+                    <Loader2 className="h-4 w-4 animate-spin" /> Loading messages…
+                  </div>
+                ) : selected ? (
                   <ConversationThread
                     conversation={selected}
                     clickupTicket={clickupLinks[selected.id]}
                     onLinkClickup={(t) => linkClickup(selected.id, t)}
                     onStatusChange={handleStatusChange}
                   />
+                ) : (
+                  <div className="flex flex-1 flex-col items-center justify-center gap-2 text-muted-foreground text-sm">
+                    <MessageSquare className="h-6 w-6 opacity-30" />
+                    Select a conversation
+                  </div>
+                )}
+              </div>
+
+              {/* Customer panel — desktop only */}
+              {selected && (
+                <div className="hidden lg:flex h-full flex-col overflow-hidden">
                   <CustomerPanel
                     customer={selected.customer}
                     clickupTicket={clickupLinks[selected.id]}
                   />
-                </>
-              ) : (
-                <div className="col-span-2 flex flex-col items-center justify-center gap-2 text-muted-foreground text-sm">
-                  <MessageSquare className="h-6 w-6 opacity-30" />
-                  Select a conversation
                 </div>
               )}
             </>
@@ -242,7 +264,7 @@ function RailBtn({
       onClick={onClick}
       title={label}
       className={cn(
-        "relative mb-1 flex h-9 w-9 items-center justify-center rounded-lg transition",
+        "relative mb-1 flex h-8 w-8 items-center justify-center rounded-lg transition md:h-9 md:w-9",
         active
           ? "bg-white/15 text-white"
           : "text-sidebar-bg-foreground/60 hover:bg-white/10 hover:text-white"

@@ -424,10 +424,17 @@ export function getMcpResponse(q: string, c: Customer): string[] {
 }
 
 export function suggestedMcp(messages: Message[]): string | null {
-  const text = messages.map((m) => m.text).join(" ").toLowerCase();
-  if (/disconnect|mailbox|oauth/.test(text)) return "Why are his mailboxes disconnected?";
+  // Scan both plain text and HTML content (strip tags from HTML)
+  const text = messages
+    .map((m) => [(m.text || ""), (m.html || "").replace(/<[^>]+>/g, " ")].join(" "))
+    .join(" ")
+    .toLowerCase();
+  if (/disconnect|mailbox|oauth|reconnect/.test(text)) return "Why are his mailboxes disconnected?";
   if (/dns|domain|verif|dkim|spf/.test(text)) return "Check domain verification status for all domains";
-  if (/429|rate.?limit|api/.test(text)) return "What's his recent API error log?";
+  if (/429|rate.?limit|api.?error/.test(text)) return "What's his recent API error log?";
+  if (/payment|billing|charge|invoice|subscription/.test(text)) return "Check payment history and subscription status";
+  // Generic fallback: always suggest a health check when there are customer messages
+  if (messages.some((m) => m.from === "customer")) return "Run account health check for this customer";
   return null;
 }
 

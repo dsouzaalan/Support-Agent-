@@ -58,8 +58,9 @@ export function ConversationThread({ conversation, clickupTicket, onLinkClickup,
   }, [conversation.id, conversation.messages]);
 
   const suggested = useMemo(() => suggestedMcp(conversation.messages), [conversation.messages]);
-  const slaLeft = Math.max(0, conversation.slaMinutes - conversation.waitMinutes);
-  const slaTone = slaLeft === 0 ? "text-danger" : slaLeft < conversation.slaMinutes * 0.34 ? "text-warning" : "text-muted-foreground";
+  const isWaiting = conversation.waitMinutes >= 0;
+  const slaLeft = isWaiting ? Math.max(0, conversation.slaMinutes - conversation.waitMinutes) : null;
+  const slaTone = slaLeft === null ? "text-muted-foreground" : slaLeft === 0 ? "text-danger" : slaLeft < 5 ? "text-danger" : slaLeft < 15 ? "text-warning" : "text-muted-foreground";
 
   const autoFill = () => {
     setAiThinking(true); setToneCheck(null);
@@ -139,7 +140,7 @@ export function ConversationThread({ conversation, clickupTicket, onLinkClickup,
   return (
     <section className="flex h-full min-w-0 flex-1 flex-col bg-background">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-border bg-card px-6 py-3">
+      <div className="flex items-center justify-between border-b border-border bg-card px-4 py-3 md:px-6">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <h2 className="truncate text-sm font-semibold">{conversation.subject}</h2>
@@ -154,13 +155,27 @@ export function ConversationThread({ conversation, clickupTicket, onLinkClickup,
               </a>
             )}
           </div>
-          <div className="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
-            <span>with {conversation.customer.name} · {conversation.customer.company}</span>
-            <span className="text-foreground/40">·</span>
-            <span className="inline-flex items-center gap-1"><Clock className="h-3 w-3" />{conversation.customer.localTime} {conversation.customer.timezone}</span>
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
+            {(() => {
+              const n = conversation.customer.name;
+              const c = conversation.customer.company;
+              // Don't show company if it's just the email domain already visible in the name
+              const showCompany = c && c !== "Unknown" && !(n.includes("@") && n.endsWith(`@${c}`));
+              return <span>with {n}{showCompany ? ` · ${c}` : ""}</span>;
+            })()}
+            {conversation.customer.localTime && (
+              <>
+                <span className="text-foreground/40">·</span>
+                <span className="inline-flex items-center gap-1">
+                  <Clock className="h-3 w-3" />
+                  {conversation.customer.localTime}
+                  {conversation.customer.timezone && <span className="opacity-70">&nbsp;{conversation.customer.timezone}</span>}
+                </span>
+              </>
+            )}
             <span className="text-foreground/40">·</span>
             <span className={cn("inline-flex items-center gap-1 font-medium", slaTone)}>
-              SLA {slaLeft === 0 ? "BREACHED" : `${slaLeft}m left`}
+              {slaLeft === null ? "SLA Met" : slaLeft === 0 ? "SLA BREACHED" : `SLA ${slaLeft}m left`}
             </span>
           </div>
         </div>
@@ -201,7 +216,7 @@ export function ConversationThread({ conversation, clickupTicket, onLinkClickup,
       )}
 
       {/* Messages */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-6">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-4 md:px-6 md:py-6">
         <div className="mx-auto flex max-w-2xl flex-col gap-4">
           {localMessages.map((m) => {
             if (m.from === "note") return (
@@ -267,7 +282,7 @@ export function ConversationThread({ conversation, clickupTicket, onLinkClickup,
       </div>
 
       {/* Composer */}
-      <div className="border-t border-border bg-card px-6 py-3">
+      <div className="border-t border-border bg-card px-3 py-3 md:px-6">
         {showNote && (
           <div className="mb-2 rounded-md border border-warning/40 bg-warning/5 p-2">
             <div className="mb-1 text-[10px] font-semibold uppercase text-warning">Add internal note (not sent to customer)</div>

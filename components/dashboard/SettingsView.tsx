@@ -9,11 +9,11 @@ export function SettingsView({ onOpenConversation }: { onOpenConversation: (id: 
   const [s, setS] = useState(initial);
   return (
     <div className="flex h-full w-full flex-col overflow-y-auto bg-background">
-      <div className="border-b border-border bg-card px-8 py-5">
+      <div className="border-b border-border bg-card px-4 py-5 md:px-8">
         <h1 className="text-lg font-semibold tracking-tight">Settings</h1>
         <p className="text-xs text-muted-foreground">Slack alerts and notification rules.</p>
       </div>
-      <div className="mx-auto w-full max-w-3xl px-8 py-6">
+      <div className="mx-auto w-full max-w-3xl px-4 py-6 md:px-8">
         <section className="rounded-lg border border-border bg-card p-5">
           <h2 className="mb-1 text-sm font-semibold">Slack channel</h2>
           <p className="mb-3 text-xs text-muted-foreground">Where Slack alerts get posted.</p>
@@ -82,7 +82,7 @@ function Toggle({ label, v, onChange }: { label: string; v: boolean; onChange: (
 export function AuditView() {
   return (
     <div className="flex h-full w-full flex-col overflow-y-auto bg-background">
-      <div className="border-b border-border bg-card px-8 py-5">
+      <div className="border-b border-border bg-card px-4 py-5 md:px-8">
         <div className="flex items-center gap-2">
           <Shield className="h-4 w-4 text-primary" />
           <h1 className="text-lg font-semibold tracking-tight">Audit log</h1>
