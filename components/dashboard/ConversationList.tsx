@@ -196,9 +196,13 @@ function ConvRow({ c, selected, onSelect, clickupTicket }: { c: Conversation; se
           )}
           {isWaiting && <span className={cn("ml-auto text-[10px] tabular-nums", waitTone)}>⏱ {c.waitMinutes}m</span>}
         </div>
-        <div className="mt-0.5 truncate text-xs text-foreground/70">{c.subject}</div>
-        <div className="flex items-center gap-1">
-          <p className="truncate text-xs text-muted-foreground">{c.preview}</p>
+        {c.subject && (
+          <div className="mt-0.5 truncate text-xs font-medium text-foreground/75">{c.subject}</div>
+        )}
+        <div className="mt-0.5 flex items-center gap-1">
+          <p className="truncate text-xs text-muted-foreground">
+            {c.preview || ""}
+          </p>
           {c.unread && <Circle className="h-2 w-2 shrink-0 fill-primary text-primary" />}
         </div>
         {visibleTags.length > 0 && (

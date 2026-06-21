@@ -196,20 +196,37 @@ export function ConversationThread({ conversation, clickupTicket, onLinkClickup,
 
       {/* Suggested diagnostic */}
       {suggested && (
-        <div className="border-b border-border bg-primary/5 px-6 py-2">
+        <div className="border-b border-border bg-primary/5 px-4 py-2 md:px-6">
           <div className="flex items-center gap-2 text-xs">
-            <Stethoscope className="h-3.5 w-3.5 text-primary" />
-            <span className="text-foreground/80">Suggested diagnostic: <span className="font-medium">{suggested}</span></span>
-            <button onClick={runMcp} className="ml-auto rounded-md bg-primary px-2 py-0.5 text-[11px] font-semibold text-primary-foreground hover:bg-primary/90">Run</button>
+            <Stethoscope className="h-3.5 w-3.5 shrink-0 text-primary" />
+            <span className="min-w-0 truncate text-foreground/80">Suggested diagnostic: <span className="font-medium">{suggested}</span></span>
+            <div className="ml-auto flex shrink-0 items-center gap-1">
+              <button
+                onClick={mcpResult ? () => setMcpResult(null) : runMcp}
+                className="rounded-md bg-primary px-2 py-0.5 text-[11px] font-semibold text-primary-foreground hover:bg-primary/90"
+              >
+                {mcpResult ? "Close" : "Run"}
+              </button>
+            </div>
           </div>
           {mcpResult && (
             <div className="mt-2 rounded-md border border-border bg-background p-2.5 text-xs">
-              <ul className="space-y-1">{mcpResult.map((l, i) => (
-                <li key={i} className="flex gap-1.5 leading-relaxed text-foreground/85"><span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-primary" /><span>{l}</span></li>
-              ))}</ul>
-              <button onClick={insertMcpIntoReply} className="mt-2 rounded-md border border-primary/40 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/5">
-                Insert into reply →
-              </button>
+              <ul className="space-y-1">
+                {mcpResult.map((l, i) => (
+                  <li key={i} className="flex gap-1.5 leading-relaxed text-foreground/85">
+                    <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-primary" />
+                    <span>{l}</span>
+                  </li>
+                ))}
+              </ul>
+              <div className="mt-2 flex items-center gap-2">
+                <button onClick={insertMcpIntoReply} className="rounded-md border border-primary/40 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/5">
+                  Insert into reply →
+                </button>
+                <button onClick={() => setMcpResult(null)} className="rounded-md border border-border px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-muted">
+                  Dismiss
+                </button>
+              </div>
             </div>
           )}
         </div>

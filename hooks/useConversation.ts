@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { api } from "@/lib/api";
 import type { Conversation } from "@/lib/mock-data";
 
@@ -8,12 +8,15 @@ interface UseConversationReturn {
   conversation: Conversation | null;
   loading: boolean;
   error: string | null;
+  update: (c: Conversation) => void;
+  refetch: () => void;
 }
 
 export function useConversation(id: string | null): UseConversationReturn {
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [version, setVersion] = useState(0);
   const mounted = useRef(true);
 
   useEffect(() => {
@@ -47,7 +50,13 @@ export function useConversation(id: string | null): UseConversationReturn {
       });
 
     return () => { cancelled = true; };
-  }, [id]);
+  }, [id, version]);
 
-  return { conversation, loading, error };
+  const update = useCallback((c: Conversation) => {
+    if (mounted.current) setConversation(c);
+  }, []);
+
+  const refetch = useCallback(() => setVersion((v) => v + 1), []);
+
+  return { conversation, loading, error, update, refetch };
 }

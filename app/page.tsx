@@ -60,6 +60,8 @@ export default function Page() {
   const {
     conversation: fullConversation,
     loading: convLoading,
+    update: updateFullConversation,
+    refetch: refetchFullConversation,
   } = useConversation(effectiveSelectedId);
 
   // Use full detail if available, fall back to list-level data for the panel
@@ -71,9 +73,15 @@ export default function Page() {
     onConversationUpdate: useCallback(
       (conv: Conversation) => {
         upsertConversation(conv);
+        if (conv.id === effectiveSelectedId) {
+          // Optimistic: apply SSE payload immediately
+          updateFullConversation(conv);
+          // Reliable: also trigger a fresh fetch to ensure accuracy
+          refetchFullConversation();
+        }
         toast.info(`Conversation updated`, { duration: 2000 });
       },
-      [upsertConversation]
+      [upsertConversation, effectiveSelectedId, updateFullConversation, refetchFullConversation]
     ),
     onNewConversation: useCallback(
       (conv: Conversation) => {
