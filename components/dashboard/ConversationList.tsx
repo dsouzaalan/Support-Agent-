@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import type { Conversation, TierType } from "@/lib/mock-data";
 import { TierBadge } from "./CustomerPanel";
@@ -39,6 +39,57 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
   const [tagFilter, setTagFilter] = useState<string | "all">("all");
   const [unhealthyOnly, setUnhealthyOnly] = useState(false);
   const [savedView, setSavedView] = useState<string | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  // Stable refs so the keyboard handler never goes stale
+  const filteredRef = useRef<Conversation[]>([]);
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      const filtered = filteredRef.current;
+      const sid = selectedIdRef.current;
+      const select = onSelectRef.current;
+
+      switch (e.key) {
+        case "j":
+        case "ArrowDown": {
+          e.preventDefault();
+          const idx = filtered.findIndex((c) => c.id === sid);
+          const next = filtered[idx + 1];
+          if (next) select(next.id);
+          break;
+        }
+        case "k":
+        case "ArrowUp": {
+          e.preventDefault();
+          const idx = filtered.findIndex((c) => c.id === sid);
+          const prev = filtered[Math.max(0, idx - 1)];
+          if (prev && prev.id !== sid) select(prev.id);
+          break;
+        }
+        case "/":
+          e.preventDefault();
+          searchRef.current?.focus();
+          break;
+        case "1": setTab("All"); break;
+        case "2": setTab("Open"); break;
+        case "3": setTab("Assigned to Me"); break;
+        case "4": setTab("Pending"); break;
+        case "5": setTab("Closed"); break;
+      }
+    };
+
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
 
   const allTags = useMemo(() => Array.from(new Set(conversations.flatMap((c) => c.customer.tags))).sort(), [conversations]);
 
@@ -71,6 +122,9 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
     return list;
   }, [conversations, tab, q, sort, tierFilter, tagFilter, unhealthyOnly]);
 
+  // Keep filteredRef in sync so the keyboard handler sees the latest visible list
+  filteredRef.current = filtered;
+
   const applySaved = (name: string) => {
     setSavedView(name);
     if (name === "My VIPs waiting") { setTab("All"); setTagFilter("VIP"); setSort("waiting"); setUnhealthyOnly(false); setTierFilter("all"); }
@@ -79,7 +133,7 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
   };
 
   return (
-    <aside className="flex w-full flex-col border-r border-border bg-card">
+    <aside className="flex h-full w-full flex-col border-r border-border bg-card">
       <div className="border-b border-border px-4 py-3.5">
         <div className="flex items-center justify-between">
           <h1 className="text-base font-semibold tracking-tight">Inbox</h1>
@@ -93,7 +147,7 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
         </div>
         <div className="mt-3 flex items-center gap-2 rounded-md border border-border bg-background px-2.5 py-1.5">
           <Search className="h-3.5 w-3.5 text-muted-foreground" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search conversations"
+          <input ref={searchRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search conversations  [/]"
             className="w-full bg-transparent text-sm placeholder:text-muted-foreground focus:outline-none" />
         </div>
         <div className="mt-3 flex gap-1 overflow-x-auto">

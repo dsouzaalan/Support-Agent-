@@ -30,12 +30,18 @@ const AGENT_LANG = "en";
 interface ThreadProps {
   conversation: Conversation;
   clickupTicket?: string;
-  onLinkClickup?: (ticket: string) => void;
+  clickupTaskUrl?: string;
+  onLinkClickup?: (ticket: string, taskUrl: string) => void;
   onStatusChange?: (status: ConvStatus) => void;
 }
 
-export function ConversationThread({ conversation, clickupTicket, onLinkClickup, onStatusChange }: ThreadProps) {
+function nameInitials(name: string): string {
+  return name.split(/\s+/).filter(Boolean).map((w) => w[0]).join("").toUpperCase().slice(0, 2);
+}
+
+export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl, onLinkClickup, onStatusChange }: ThreadProps) {
   const { user } = useAuth();
+  const currentUserName = user ? `${user.firstName} ${user.lastName ?? ""}`.trim() : "Agent";
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [aiThinking, setAiThinking] = useState(false);
@@ -50,12 +56,82 @@ export function ConversationThread({ conversation, clickupTicket, onLinkClickup,
   const [localMessages, setLocalMessages] = useState<Message[]>(conversation.messages);
   const [clickupOpen, setClickupOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const replyRef = useRef<HTMLTextAreaElement>(null);
+
+  // Stable refs for keyboard handler — avoids stale closures without re-registering listener
+  const conversationRef = useRef(conversation);
+  conversationRef.current = conversation;
+  const onStatusChangeRef = useRef(onStatusChange);
+  onStatusChangeRef.current = onStatusChange;
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
 
   useEffect(() => {
     setDraft(""); setToneCheck(null); setTranslatePreview(null);
     setShowTranslated({}); setMcpResult(null); setLocalMessages(conversation.messages);
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [conversation.id, conversation.messages]);
+
+  // Thread keyboard shortcuts — only fire when not typing in an input/textarea
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      switch (e.key.toLowerCase()) {
+        case "r":
+          e.preventDefault();
+          replyRef.current?.focus();
+          break;
+        case "e": {
+          e.preventDefault();
+          const conv = conversationRef.current;
+          const newStatus = conv.status === "closed" ? "open" : "closed";
+          onStatusChangeRef.current?.(newStatus);
+          toast.success(newStatus === "closed" ? "Marked resolved" : "Conversation reopened");
+          break;
+        }
+        case "a":
+          e.preventDefault();
+          setAiThinking(true); setToneCheck(null);
+          setTimeout(() => {
+            setDraft(DRAFTS[conversationRef.current.id] || "Thanks for reaching out — looking into this now.");
+            setAiThinking(false);
+          }, 800);
+          break;
+        case "t":
+          e.preventDefault();
+          if (!draftRef.current.trim()) { toast.error("Write a reply first"); return; }
+          setToneCheck({ tone: "Professional · Empathetic", suggestion: "Consider opening with the customer's name to warm the tone." });
+          break;
+        case "l":
+          e.preventDefault();
+          if (!draftRef.current.trim()) { toast.error("Write a reply first"); return; }
+          (() => {
+            const lang = conversationRef.current.customer.language;
+            if (lang === AGENT_LANG) { toast(`Customer language matches yours.`); return; }
+            setTranslatePreview({ lang, text: `[${LANG_LABELS[lang]} translation] ${draftRef.current}` });
+          })();
+          break;
+        case "n":
+          e.preventDefault();
+          setShowNote(true);
+          break;
+        case "m":
+          e.preventDefault();
+          setShowCanned((v) => !v); setShowArticles(false);
+          break;
+        case "c":
+          e.preventDefault();
+          setClickupOpen(true);
+          break;
+      }
+    };
+
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
 
   const suggested = useMemo(() => suggestedMcp(conversation.messages), [conversation.messages]);
   const isWaiting = conversation.waitMinutes >= 0;
@@ -149,7 +225,7 @@ export function ConversationThread({ conversation, clickupTicket, onLinkClickup,
               conversation.status === "pending" && "bg-warning/20 text-warning",
               conversation.status === "closed" && "bg-muted text-muted-foreground")}>{conversation.status}</span>
             {clickupTicket && (
-              <a href={`https://app.clickup.com/t/${clickupTicket}`} target="_blank" rel="noreferrer"
+              <a href={clickupTaskUrl || `https://app.clickup.com/t/${clickupTicket}`} target="_blank" rel="noreferrer"
                 className="inline-flex items-center gap-1 rounded-md border border-primary/30 bg-primary/5 px-1.5 py-0.5 text-[10px] font-semibold text-primary hover:bg-primary/10">
                 <ClipboardList className="h-2.5 w-2.5" />{clickupTicket}
               </a>
@@ -260,9 +336,11 @@ export function ConversationThread({ conversation, clickupTicket, onLinkClickup,
             const isAgent = m.from === "agent";
             return (
               <div key={m.id} className={cn("flex gap-2.5", isAgent && "flex-row-reverse")}>
-                <div className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold",
-                  !isAgent ? "bg-gradient-to-br from-primary/80 to-primary text-primary-foreground" : "bg-foreground text-background")}>
-                  {!isAgent ? conversation.customer.initials : "You"}
+                <div
+                  title={isAgent ? (m.author === currentUserName ? `You · ${m.author}` : (m.author || "Agent")) : conversation.customer.name}
+                  className={cn("flex h-7 w-7 shrink-0 cursor-default items-center justify-center rounded-full text-[10px] font-semibold",
+                    !isAgent ? "bg-gradient-to-br from-primary/80 to-primary text-primary-foreground" : "bg-foreground text-background")}>
+                  {!isAgent ? conversation.customer.initials : nameInitials(m.author || "Agent")}
                 </div>
                 <div className={cn("max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed",
                   !isAgent ? "rounded-tl-sm bg-card text-foreground shadow-sm ring-1 ring-border" : "rounded-tr-sm bg-primary text-primary-foreground")}>
@@ -303,8 +381,15 @@ export function ConversationThread({ conversation, clickupTicket, onLinkClickup,
         {showNote && (
           <div className="mb-2 rounded-md border border-warning/40 bg-warning/5 p-2">
             <div className="mb-1 text-[10px] font-semibold uppercase text-warning">Add internal note (not sent to customer)</div>
-            <textarea value={noteVal} onChange={(e) => setNoteVal(e.target.value)}
-              placeholder="Use @name to mention a teammate…" rows={2}
+            <textarea
+              value={noteVal}
+              onChange={(e) => setNoteVal(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); addNote(); }
+                if (e.key === "Escape") { setShowNote(false); }
+              }}
+              placeholder="Use @name to mention a teammate… (Enter to post, Shift+Enter for newline)"
+              rows={2}
               className="w-full resize-none rounded border border-border bg-background px-2 py-1 text-xs focus:outline-none" />
             <div className="mt-1 flex justify-end gap-1">
               <button onClick={() => setShowNote(false)} className="rounded px-2 py-0.5 text-[10px] text-muted-foreground hover:bg-muted">Cancel</button>
@@ -355,8 +440,16 @@ export function ConversationThread({ conversation, clickupTicket, onLinkClickup,
           </div>
         )}
         <div className="rounded-lg border border-border bg-background focus-within:border-primary/60 focus-within:ring-2 focus-within:ring-primary/15">
-          <textarea value={draft} onChange={(e) => setDraft(e.target.value)}
-            placeholder="Write a reply… or click Auto-Fill" rows={3}
+          <textarea
+            ref={replyRef}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+              if (e.key === "Escape") { setDraft(""); setToneCheck(null); setTranslatePreview(null); }
+            }}
+            placeholder="Write a reply… (Enter to send, Shift+Enter for newline)"
+            rows={3}
             className="w-full resize-none bg-transparent px-3 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none" />
           <div className="flex flex-wrap items-center justify-between gap-1 border-t border-border px-2 py-1.5">
             <div className="flex flex-wrap items-center gap-0.5">
@@ -393,7 +486,8 @@ export function ConversationThread({ conversation, clickupTicket, onLinkClickup,
         onOpenChange={setClickupOpen}
         conversation={conversation}
         existingTicket={clickupTicket}
-        onCreated={(ticket) => { onLinkClickup?.(ticket); setClickupOpen(false); toast.success(`Created ${ticket} in ClickUp`); }}
+        existingTaskUrl={clickupTaskUrl}
+        onCreated={(ticket, taskUrl) => { onLinkClickup?.(ticket, taskUrl); setClickupOpen(false); toast.success(`Created ${ticket} in ClickUp`); }}
       />
     </section>
   );
@@ -436,7 +530,49 @@ function aiDraftFromConversation(conv: Conversation): { title: string; descripti
     conv.customer.sentiment === "negative" ? "High" :
     conv.priorityScore >= 80 ? "High" : "Normal";
 
-  const title = subject.length > 70 ? subject.slice(0, 67) + "…" : subject;
+  const title = (() => {
+    // Strip email prefixes and whitespace
+    const cleanSubject = subject.replace(/^(re|fwd|fw):\s*/gi, "").trim();
+
+    // Detect the core issue type from message content
+    const issueMap: [RegExp, string][] = [
+      [/disconnected|disconnect|mailbox.*off/i, "Mailbox disconnection"],
+      [/duplicate.*charge|charged.*twice|double.*charge/i, "Duplicate charge"],
+      [/refund/i, "Refund request"],
+      [/payment.*fail|card.*expir|billing/i, "Billing issue"],
+      [/domain.*fail|dns|verify|verification/i, "Domain verification failure"],
+      [/api.*error|rate.?limit|429/i, "API rate limit error"],
+      [/csv|import|export/i, "Data import issue"],
+      [/crash|not.*load|broken|bug/i, "Product bug"],
+      [/feature|wish|could you add/i, "Feature request"],
+      [/upgrade|downgrade|plan/i, "Plan change request"],
+    ];
+
+    let issueLabel = "";
+    for (const [pattern, label] of issueMap) {
+      if (pattern.test(firstCustomerMsg) || pattern.test(cleanSubject)) {
+        issueLabel = label;
+        break;
+      }
+    }
+
+    // If subject is descriptive enough, use it; otherwise synthesize from issue + company
+    const isGeneric = cleanSubject.length < 15 || /^(support|help|question|inquiry|issue|problem|ticket|contact|request|hi|hello)$/i.test(cleanSubject);
+    const company = conv.customer.company && conv.customer.company !== "Unknown" ? conv.customer.company : conv.customer.name.split(" ")[0];
+
+    let raw: string;
+    if (!isGeneric) {
+      raw = cleanSubject;
+    } else if (issueLabel) {
+      raw = `${company} – ${issueLabel}`;
+    } else {
+      // Fall back to first meaningful sentence of the customer message
+      const firstSentence = firstCustomerMsg.split(/[.!?]/)[0].trim();
+      raw = firstSentence.length > 10 ? firstSentence : cleanSubject;
+    }
+
+    return raw.length > 70 ? raw.slice(0, 67) + "…" : raw;
+  })();
 
   const description =
 `Reported by ${conv.customer.name} (${conv.customer.company}) — tier ${conv.customer.tier}.
@@ -446,7 +582,7 @@ Summary: ${firstCustomerMsg.slice(0, 240)}${firstCustomerMsg.length > 240 ? "…
 Account context:
 ${flags.length ? flags.map((f) => "• " + f).join("\n") : "• No active health flags."}
 
-Conversation link: https://support.zapmail.internal/conversations/${conv.id}`;
+Conversation link: https://support.zapmail.internal/inbox/${conv.id}`;
 
   return { title, description, category, priority };
 }
@@ -533,35 +669,60 @@ function LinkifiedText({ text, isAgent }: { text: string; isAgent: boolean }) {
   );
 }
 
-function ClickUpModal({ open, onOpenChange, conversation, existingTicket, onCreated }: {
+interface ClickUpMember {
+  id: number;
+  name: string;
+  email: string;
+  profilePicture: string | null;
+}
+
+function ClickUpModal({ open, onOpenChange, conversation, existingTicket, existingTaskUrl, onCreated }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   conversation: Conversation;
   existingTicket?: string;
-  onCreated: (ticket: string) => void;
+  existingTaskUrl?: string;
+  onCreated: (ticket: string, taskUrl: string) => void;
 }) {
   const draft = useMemo(() => aiDraftFromConversation(conversation), [conversation]);
   const [title, setTitle] = useState(draft.title);
   const [description, setDescription] = useState(draft.description);
   const [category, setCategory] = useState<ClickUpCategory>(draft.category);
   const [priority, setPriority] = useState<ClickUpPriority>(draft.priority);
+  const [members, setMembers] = useState<ClickUpMember[]>([]);
+  const [assigneeId, setAssigneeId] = useState<number | null>(null);
+  const [loadingMembers, setLoadingMembers] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (open) {
-      setTitle(draft.title); setDescription(draft.description);
-      setCategory(draft.category); setPriority(draft.priority);
-    }
+    if (!open) return;
+    setTitle(draft.title);
+    setDescription(draft.description);
+    setCategory(draft.category);
+    setPriority(draft.priority);
+    setError(null);
+    setAssigneeId(null);
+
+    setLoadingMembers(true);
+    api.clickup.getMembers()
+      .then((res) => setMembers(res?.data ?? []))
+      .catch(() => setMembers([]))
+      .finally(() => setLoadingMembers(false));
   }, [open, draft]);
 
-  const submit = () => {
-    if (!title.trim()) return;
+  const submit = async () => {
+    if (!title.trim() || submitting) return;
     setSubmitting(true);
-    setTimeout(() => {
-      const ticket = `CU-${Math.floor(1000 + Math.random() * 9000)}`;
+    setError(null);
+    try {
+      const res = await api.clickup.createTask({ name: title.trim(), description: description.trim(), priority, assigneeId });
+      onCreated(res.data.taskId, res.data.taskUrl);
+    } catch (err: any) {
+      setError(err.message || 'Failed to create task');
+    } finally {
       setSubmitting(false);
-      onCreated(ticket);
-    }, 700);
+    }
   };
 
   return (
@@ -576,25 +737,31 @@ function ClickUpModal({ open, onOpenChange, conversation, existingTicket, onCrea
         {existingTicket ? (
           <div className="space-y-3 text-sm">
             <p className="text-muted-foreground">This conversation is already linked to a ClickUp task.</p>
-            <a href={`https://app.clickup.com/t/${existingTicket}`} target="_blank" rel="noreferrer"
+            <a href={existingTaskUrl || `https://app.clickup.com/t/${existingTicket}`} target="_blank" rel="noreferrer"
               className="inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm font-semibold text-primary hover:bg-primary/10">
               Open {existingTicket} <ExternalLink className="h-3.5 w-3.5" />
             </a>
           </div>
         ) : (
           <div className="space-y-3">
-            <div className="rounded-md border border-primary/20 bg-primary/5 px-2.5 py-1.5 text-[11px] text-primary">
-              <Sparkles className="mr-1 inline h-3 w-3" /> AI pre-filled from this conversation. Review and edit before sending.
-            </div>
+            {error && (
+              <div className="rounded-md border border-danger/30 bg-danger/5 px-2.5 py-1.5 text-[11px] text-danger">{error}</div>
+            )}
             <Field label="Title">
               <input value={title} onChange={(e) => setTitle(e.target.value)}
                 className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-sm focus:border-primary/50 focus:outline-none" />
             </Field>
             <Field label="Description">
-              <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={8}
+              <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={6}
                 className="w-full resize-none rounded-md border border-border bg-background px-2.5 py-1.5 text-xs leading-relaxed focus:border-primary/50 focus:outline-none" />
             </Field>
             <div className="grid grid-cols-2 gap-3">
+              <Field label="Priority">
+                <select value={priority} onChange={(e) => setPriority(e.target.value as ClickUpPriority)}
+                  className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-xs focus:border-primary/50 focus:outline-none">
+                  {(["Low", "Normal", "High", "Urgent"] as ClickUpPriority[]).map((p) => <option key={p} value={p}>{p}</option>)}
+                </select>
+              </Field>
               <Field label="Category">
                 <div className="flex gap-1">
                   {(["Bug", "Feature", "Enhancement"] as ClickUpCategory[]).map((c) => (
@@ -604,16 +771,25 @@ function ClickUpModal({ open, onOpenChange, conversation, existingTicket, onCrea
                   ))}
                 </div>
               </Field>
-              <Field label="Priority">
-                <select value={priority} onChange={(e) => setPriority(e.target.value as ClickUpPriority)}
-                  className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-xs focus:border-primary/50 focus:outline-none">
-                  {(["Low", "Normal", "High", "Urgent"] as ClickUpPriority[]).map((p) => <option key={p} value={p}>{p}</option>)}
+            </div>
+            <Field label="Assign to">
+              {loadingMembers ? (
+                <div className="rounded-md border border-border bg-background px-2.5 py-1.5 text-xs text-muted-foreground">Loading team members…</div>
+              ) : members.length === 0 ? (
+                <div className="rounded-md border border-border bg-background px-2.5 py-1.5 text-xs text-muted-foreground">No members found — check CLICKUP_LIST_ID</div>
+              ) : (
+                <select
+                  value={assigneeId ?? ""}
+                  onChange={(e) => setAssigneeId(e.target.value ? Number(e.target.value) : null)}
+                  className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-xs focus:border-primary/50 focus:outline-none"
+                >
+                  <option value="">Unassigned</option>
+                  {members.map((m) => (
+                    <option key={m.id} value={m.id}>{m.name} ({m.email})</option>
+                  ))}
                 </select>
-              </Field>
-            </div>
-            <div className="text-[10px] text-muted-foreground">
-              Routes to ClickUp list: <span className="font-mono text-foreground/70">{category === "Bug" ? "ZM · Bugs" : category === "Feature" ? "ZM · Feature Requests" : "ZM · Enhancements"}</span>
-            </div>
+              )}
+            </Field>
           </div>
         )}
         {!existingTicket && (

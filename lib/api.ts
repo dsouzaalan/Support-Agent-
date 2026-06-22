@@ -79,6 +79,21 @@ export const api = {
       }),
   },
 
+  clickup: {
+    getMembers: () => apiFetch('/clickup/members'),
+
+    createTask: (payload: {
+      name: string;
+      description: string;
+      priority: string;
+      assigneeId: number | null;
+    }) =>
+      apiFetch('/clickup/tasks', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+  },
+
   sseUrl: () => {
     const token = getToken();
     return `${API_BASE}/api/v1/events${token ? `?token=${encodeURIComponent(token)}` : ''}`;
