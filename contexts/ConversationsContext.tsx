@@ -15,6 +15,7 @@ interface ConversationsContextValue {
   refetch: () => Promise<void>;
   upsertConversation: (c: Conversation) => void;
   setLocalStatus: (id: string, status: ConvStatus) => void;
+  patchConversation: (id: string, patch: Partial<Conversation>) => void;
   clickupLinks: Record<string, ClickUpLink>;
   linkClickup: (id: string, ticket: string, taskUrl: string) => void;
   latestUpdate: Conversation | null;
@@ -23,7 +24,7 @@ interface ConversationsContextValue {
 const ConversationsContext = createContext<ConversationsContextValue | null>(null);
 
 export function ConversationsProvider({ children }: { children: React.ReactNode }) {
-  const { conversations, loading, error, refetch, upsertConversation, setLocalStatus } = useConversations();
+  const { conversations, loading, error, refetch, upsertConversation, setLocalStatus, patchConversation } = useConversations();
   const [clickupLinks, setClickupLinks] = useState<Record<string, ClickUpLink>>({});
   const [latestUpdate, setLatestUpdate] = useState<Conversation | null>(null);
 
@@ -35,7 +36,10 @@ export function ConversationsProvider({ children }: { children: React.ReactNode 
     onConversationUpdate: useCallback((conv: Conversation) => {
       upsertConversation(conv);
       setLatestUpdate(conv);
-      toast.info("Conversation updated", { duration: 2000 });
+      // Don't toast for closed — the conversation page handles navigation + its own toast
+      if (conv.status !== "closed") {
+        toast.info("Conversation updated", { duration: 2000 });
+      }
     }, [upsertConversation]),
     onNewConversation: useCallback((conv: Conversation) => {
       upsertConversation(conv);
@@ -45,7 +49,7 @@ export function ConversationsProvider({ children }: { children: React.ReactNode 
 
   return (
     <ConversationsContext.Provider
-      value={{ conversations, loading, error, refetch, upsertConversation, setLocalStatus, clickupLinks, linkClickup, latestUpdate }}
+      value={{ conversations, loading, error, refetch, upsertConversation, setLocalStatus, patchConversation, clickupLinks, linkClickup, latestUpdate }}
     >
       {children}
     </ConversationsContext.Provider>

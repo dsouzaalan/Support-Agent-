@@ -98,6 +98,7 @@ function InboxContent({ children }: { children: React.ReactNode }) {
           <CustomerPanel
             customer={selectedConversation.customer}
             clickupTicket={clickupLinks[selectedId]?.ticket}
+            conversationTags={selectedConversation.tags}
           />
         </div>
       )}

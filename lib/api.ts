@@ -66,10 +66,10 @@ export const api = {
 
     get: (id: string) => apiFetch(`/conversations/${id}`),
 
-    reply: (id: string, body: string, type: 'comment' | 'note' = 'comment') =>
+    reply: (id: string, body: string, type: 'comment' | 'note' = 'comment', attachments?: { filename: string; mimeType: string; base64: string }[]) =>
       apiFetch(`/conversations/${id}/reply`, {
         method: 'POST',
-        body: JSON.stringify({ body, type }),
+        body: JSON.stringify({ body, type, attachments }),
       }),
 
     updateStatus: (id: string, status: string) =>
@@ -77,6 +77,58 @@ export const api = {
         method: 'PATCH',
         body: JSON.stringify({ status }),
       }),
+
+    snooze: (id: string, snoozedUntil: number) =>
+      apiFetch(`/conversations/${id}/snooze`, {
+        method: 'POST',
+        body: JSON.stringify({ snoozedUntil }),
+      }),
+
+    create: (contactId: string, body: string) =>
+      apiFetch('/conversations', {
+        method: 'POST',
+        body: JSON.stringify({ contactId, body }),
+      }),
+  },
+
+  contacts: {
+    search: (q: string) => apiFetch(`/contacts/search?q=${encodeURIComponent(q)}`),
+  },
+
+  tags: {
+    list: () => apiFetch('/tags'),
+    create: (name: string) =>
+      apiFetch('/tags', { method: 'POST', body: JSON.stringify({ name }) }),
+    add: (conversationId: string, tagId: string) =>
+      apiFetch(`/conversations/${conversationId}/tags`, {
+        method: 'POST',
+        body: JSON.stringify({ tagId }),
+      }),
+    remove: (conversationId: string, tagId: string) =>
+      apiFetch(`/conversations/${conversationId}/tags/${tagId}`, { method: 'DELETE' }),
+  },
+
+  articles: {
+    list: (params?: { page?: number; perPage?: number }) => {
+      const q = new URLSearchParams();
+      if (params?.page) q.set('page', String(params.page));
+      if (params?.perPage) q.set('perPage', String(params.perPage));
+      const qs = q.toString();
+      return apiFetch(`/articles${qs ? `?${qs}` : ''}`);
+    },
+    create: (payload: { title: string; body: string; state?: 'published' | 'draft' }) =>
+      apiFetch('/articles', { method: 'POST', body: JSON.stringify(payload) }),
+  },
+
+  macros: {
+    list: () => apiFetch('/macros'),
+    create: (payload: { name: string; description: string; actions: any[] }) =>
+      apiFetch('/macros', { method: 'POST', body: JSON.stringify(payload) }),
+    update: (id: string, payload: Partial<{ name: string; description: string; actions: any[] }>) =>
+      apiFetch(`/macros/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+    delete: (id: string) => apiFetch(`/macros/${id}`, { method: 'DELETE' }),
+    apply: (macroId: string, conversationId: string) =>
+      apiFetch(`/macros/${macroId}/apply/${conversationId}`, { method: 'POST' }),
   },
 
   clickup: {

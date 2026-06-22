@@ -13,7 +13,7 @@ import { Loader2 } from "lucide-react";
 export default function ConversationPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const { conversations, setLocalStatus, refetch: refetchList, clickupLinks, linkClickup, latestUpdate } = useConversationsContext();
+  const { conversations, setLocalStatus, patchConversation, refetch: refetchList, clickupLinks, linkClickup, latestUpdate } = useConversationsContext();
 
   const {
     conversation: fullConversation,
@@ -22,12 +22,19 @@ export default function ConversationPage() {
     refetch: refetchFull,
   } = useConversation(id);
 
-  // When SSE fires an update for this conversation, sync the full detail view
+  // When SSE fires an update for this conversation, sync or navigate away if closed
   useEffect(() => {
-    if (latestUpdate?.id === id) {
-      updateFullConversation(latestUpdate);
-      refetchFull();
+    if (latestUpdate?.id !== id) return;
+    if (latestUpdate.status === "closed") {
+      // Someone closed this conversation externally (e.g. from Intercom)
+      const next = conversations.find((c) => c.id !== id && c.status !== "closed");
+      toast.info("This conversation was closed");
+      if (next) router.push(`/inbox/${next.id}`);
+      else router.push("/inbox");
+      return;
     }
+    updateFullConversation(latestUpdate);
+    refetchFull();
   }, [latestUpdate]);
 
   const listConversation = conversations.find((c) => c.id === id) ?? null;
@@ -47,6 +54,20 @@ export default function ConversationPage() {
       refetchList();
     }
   }, [id, conversations, setLocalStatus, refetchList, router]);
+
+  const handleSnooze = useCallback(async (snoozedUntil: number) => {
+    const next = conversations.find((c) => c.id !== id && c.status === "open");
+    patchConversation(id, { status: "pending", snoozedUntil });
+    try {
+      await api.conversations.snooze(id, snoozedUntil);
+      toast.success("Conversation snoozed");
+      if (next) router.push(`/inbox/${next.id}`);
+      else router.push("/inbox");
+    } catch (err: any) {
+      toast.error(`Failed to snooze: ${err.message}`);
+      patchConversation(id, { status: "open", snoozedUntil: null });
+    }
+  }, [id, conversations, patchConversation, router]);
 
   if (convLoading && !conversation) {
     return (
@@ -71,6 +92,8 @@ export default function ConversationPage() {
       clickupTaskUrl={clickupLinks[id]?.taskUrl}
       onLinkClickup={(ticket, taskUrl) => linkClickup(id, ticket, taskUrl)}
       onStatusChange={handleStatusChange}
+      onTagsChange={(tags) => patchConversation(id, { tags })}
+      onSnooze={handleSnooze}
     />
   );
 }

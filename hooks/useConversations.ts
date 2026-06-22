@@ -11,6 +11,7 @@ interface UseConversationsReturn {
   refetch: () => Promise<void>;
   upsertConversation: (c: Conversation) => void;
   setLocalStatus: (id: string, status: ConvStatus) => void;
+  patchConversation: (id: string, patch: Partial<Conversation>) => void;
 }
 
 export function useConversations(): UseConversationsReturn {
@@ -59,5 +60,11 @@ export function useConversations(): UseConversationsReturn {
     );
   }, []);
 
-  return { conversations, loading, error, refetch: fetchAll, upsertConversation, setLocalStatus };
+  const patchConversation = useCallback((id: string, patch: Partial<Conversation>) => {
+    setConversations((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, ...patch } : c))
+    );
+  }, []);
+
+  return { conversations, loading, error, refetch: fetchAll, upsertConversation, setLocalStatus, patchConversation };
 }

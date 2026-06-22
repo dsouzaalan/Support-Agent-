@@ -14,13 +14,13 @@ import {
 
 const CURRENT_AGENT = { id: "me", name: "Riley Park", isAdmin: false };
 
-export function CustomerPanel({ customer, clickupTicket }: { customer: Customer; clickupTicket?: string }) {
+export function CustomerPanel({ customer, clickupTicket, conversationTags }: { customer: Customer; clickupTicket?: string; conversationTags?: { id: string; name: string }[] }) {
   const [tags, setTags] = useState<string[]>(customer.tags);
   const [notes, setNotes] = useState<CustomerNote[]>(customer.notes);
 
   return (
     <aside className="flex w-full flex-col overflow-y-auto border-l border-border bg-card">
-      <Identity customer={customer} tags={tags} setTags={setTags} clickupTicket={clickupTicket} />
+      <Identity customer={customer} tags={tags} setTags={setTags} clickupTicket={clickupTicket} conversationTags={conversationTags} />
       <AccountTrend customer={customer} />
       <Snapshot customer={customer} />
       <Products customer={customer} />
@@ -37,7 +37,7 @@ export function CustomerPanel({ customer, clickupTicket }: { customer: Customer;
 
 // =========== Sections ===========
 
-function Identity({ customer, tags, setTags, clickupTicket }: { customer: Customer; tags: string[]; setTags: (t: string[]) => void; clickupTicket?: string }) {
+function Identity({ customer, tags, setTags, clickupTicket, conversationTags }: { customer: Customer; tags: string[]; setTags: (t: string[]) => void; clickupTicket?: string; conversationTags?: { id: string; name: string }[] }) {
   const [adding, setAdding] = useState(false);
   const [val, setVal] = useState("");
   const suggestions = tagLibrary.filter((t) => !tags.includes(t) && t.toLowerCase().includes(val.toLowerCase())).slice(0, 5);
@@ -105,6 +105,18 @@ function Identity({ customer, tags, setTags, clickupTicket }: { customer: Custom
           </button>
         )}
       </div>
+      {conversationTags && conversationTags.length > 0 && (
+        <div className="mt-2">
+          <div className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground/60">Conversation tags</div>
+          <div className="flex flex-wrap gap-1">
+            {conversationTags.map((t) => (
+              <span key={t.id} className="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
+                #{t.name}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

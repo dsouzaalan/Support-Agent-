@@ -3,14 +3,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import type { Conversation, ConvStatus, Message } from "@/lib/mock-data";
-import { cannedResponses, helpArticles, suggestedMcp, getMcpResponse } from "@/lib/mock-data";
+import { suggestedMcp, getMcpResponse } from "@/lib/mock-data";
 import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   Sparkles, SendHorizonal, Wand2, ExternalLink,
   AlertTriangle, CheckCheck, MoreHorizontal, UserPlus, Languages,
   BookOpen, FileText, Clock, Stethoscope, StickyNote, AtSign, CreditCard,
-  ClipboardList, RotateCcw,
+  ClipboardList, RotateCcw, Keyboard, Paperclip, Tag, X, Plus, Loader2, BellOff,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -33,13 +33,22 @@ interface ThreadProps {
   clickupTaskUrl?: string;
   onLinkClickup?: (ticket: string, taskUrl: string) => void;
   onStatusChange?: (status: ConvStatus) => void;
+  onTagsChange?: (tags: { id: string; name: string }[]) => void;
+  onSnooze?: (snoozedUntil: number) => void;
 }
 
 function nameInitials(name: string): string {
   return name.split(/\s+/).filter(Boolean).map((w) => w[0]).join("").toUpperCase().slice(0, 2);
 }
 
-export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl, onLinkClickup, onStatusChange }: ThreadProps) {
+const SNOOZE_OPTIONS = [
+  { label: "1 hour",      getTime: () => Math.floor(Date.now() / 1000) + 3600 },
+  { label: "4 hours",     getTime: () => Math.floor(Date.now() / 1000) + 14400 },
+  { label: "Tomorrow 9am",getTime: () => { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(9, 0, 0, 0); return Math.floor(d.getTime() / 1000); } },
+  { label: "Next week",   getTime: () => Math.floor(Date.now() / 1000) + 7 * 24 * 3600 },
+];
+
+export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl, onLinkClickup, onStatusChange, onTagsChange, onSnooze }: ThreadProps) {
   const { user } = useAuth();
   const currentUserName = user ? `${user.firstName} ${user.lastName ?? ""}`.trim() : "Agent";
   const [draft, setDraft] = useState("");
@@ -55,6 +64,35 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
   const [noteVal, setNoteVal] = useState("");
   const [localMessages, setLocalMessages] = useState<Message[]>(conversation.messages);
   const [clickupOpen, setClickupOpen] = useState(false);
+  const [showShortcutsPopover, setShowShortcutsPopover] = useState(false);
+  const [showSnoozeMenu, setShowSnoozeMenu] = useState(false);
+
+  // Tags
+  const [convTags, setConvTags] = useState<{ id: string; name: string }[]>(conversation.tags ?? []);
+  const [allTags, setAllTags] = useState<{ id: string; name: string }[]>([]);
+  const [showTagPicker, setShowTagPicker] = useState(false);
+  const [tagsLoading, setTagsLoading] = useState(false);
+  const [newTagName, setNewTagName] = useState("");
+  const [creatingTag, setCreatingTag] = useState(false);
+
+  // Macros (real API)
+  const [macros, setMacros] = useState<{ id: string; name: string; description: string; actions: any[] }[]>([]);
+  const [macrosLoading, setMacrosLoading] = useState(false);
+  const [applyingMacro, setApplyingMacro] = useState<string | null>(null);
+
+  // Articles (real API)
+  const [articles, setArticles] = useState<{ id: string; title: string; url: string }[]>([]);
+  const [articlesLoading, setArticlesLoading] = useState(false);
+  const [showNewArticle, setShowNewArticle] = useState(false);
+  const [newArticleTitle, setNewArticleTitle] = useState("");
+  const [newArticleBody, setNewArticleBody] = useState("");
+  const [newArticleState, setNewArticleState] = useState<"published" | "draft">("published");
+  const [creatingArticle, setCreatingArticle] = useState(false);
+
+  // File attachments — stored as File objects, converted to base64 only on send
+  const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const replyRef = useRef<HTMLTextAreaElement>(null);
 
@@ -69,8 +107,20 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
   useEffect(() => {
     setDraft(""); setToneCheck(null); setTranslatePreview(null);
     setShowTranslated({}); setMcpResult(null); setLocalMessages(conversation.messages);
+    setConvTags(conversation.tags ?? []);
+    setAttachedFiles([]);
+
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [conversation.id, conversation.messages]);
+
+  // Load tags, macros, articles once on mount
+  useEffect(() => {
+    api.tags.list().then((res) => setAllTags(res.data ?? [])).catch(() => {});
+    setMacrosLoading(true);
+    api.macros.list().then((res) => setMacros(res.data ?? [])).catch(() => {}).finally(() => setMacrosLoading(false));
+    setArticlesLoading(true);
+    api.articles.list({ perPage: 20 }).then((res) => setArticles(res.data?.articles ?? [])).catch(() => {}).finally(() => setArticlesLoading(false));
+  }, []);
 
   // Thread keyboard shortcuts — only fire when not typing in an input/textarea
   useEffect(() => {
@@ -153,7 +203,7 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
     setTranslatePreview({ lang, text: `[${LANG_LABELS[lang]} translation] ${draft}` });
   };
   const send = async () => {
-    if (!draft.trim() || sending) return;
+    if ((!draft.trim() && !attachedFiles.length) || sending) return;
     const body = translatePreview ? translatePreview.text : draft.trim();
     setSending(true);
     // Optimistic update
@@ -167,18 +217,150 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
     };
     setLocalMessages((prev) => [...prev, optimistic]);
     setDraft(""); setToneCheck(null); setTranslatePreview(null);
+    const filesToSend = [...attachedFiles];
+    setAttachedFiles([]);
     try {
-      await api.conversations.reply(conversation.id, body, "comment");
+      const attachments = filesToSend.length
+        ? await Promise.all(filesToSend.map((file) => new Promise<{ filename: string; mimeType: string; base64: string }>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve({ filename: file.name, mimeType: file.type, base64: (reader.result as string).split(",")[1] });
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+          })))
+        : undefined;
+      await api.conversations.reply(conversation.id, body, "comment", attachments);
       toast.success(translatePreview ? `Reply sent in ${LANG_LABELS[translatePreview.lang]}.` : `Reply sent to ${conversation.customer.name}.`);
     } catch (err: any) {
       toast.error(`Failed to send reply: ${err.message}`);
-      // Rollback optimistic message
       setLocalMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
       setDraft(body);
     } finally {
       setSending(false);
     }
   };
+  // Tag handlers
+  const handleAddTag = async (tag: { id: string; name: string }) => {
+    if (convTags.some((t) => t.id === tag.id)) return;
+    const next = [...convTags, tag];
+    setConvTags(next);
+    onTagsChange?.(next);
+    setShowTagPicker(false);
+    try {
+      await api.tags.add(conversation.id, tag.id);
+      toast.success(`Tagged as #${tag.name}`);
+    } catch (err: any) {
+      const rolled = convTags.filter((t) => t.id !== tag.id);
+      setConvTags(rolled);
+      onTagsChange?.(rolled);
+      toast.error(`Failed to add tag: ${err.message}`);
+    }
+  };
+  const handleRemoveTag = async (tagId: string) => {
+    const tag = convTags.find((t) => t.id === tagId);
+    const next = convTags.filter((t) => t.id !== tagId);
+    setConvTags(next);
+    onTagsChange?.(next);
+    try {
+      await api.tags.remove(conversation.id, tagId);
+    } catch (err: any) {
+      if (tag) {
+        const rolled = [...next, tag];
+        setConvTags(rolled);
+        onTagsChange?.(rolled);
+      }
+      toast.error(`Failed to remove tag: ${err.message}`);
+    }
+  };
+
+  const handleCreateTag = async () => {
+    const name = newTagName.trim();
+    if (!name || creatingTag) return;
+    setCreatingTag(true);
+    try {
+      const res = await api.tags.create(name);
+      const tag: { id: string; name: string } = res.data;
+      setAllTags((prev) => [...prev, tag]);
+      setNewTagName("");
+      await handleAddTag(tag);
+    } catch (err: any) {
+      toast.error(`Failed to create tag: ${err.message}`);
+    } finally {
+      setCreatingTag(false);
+    }
+  };
+
+  const handleCreateArticle = async () => {
+    if (!newArticleTitle.trim() || !newArticleBody.trim() || creatingArticle) return;
+    setCreatingArticle(true);
+    try {
+      const res = await api.articles.create({
+        title: newArticleTitle.trim(),
+        body: newArticleBody.trim(),
+        state: newArticleState,
+      });
+      const article = res.data;
+      setArticles((prev) => [article, ...prev]);
+      setNewArticleTitle(""); setNewArticleBody(""); setNewArticleState("published");
+      setShowNewArticle(false);
+      toast.success(`Article "${article.title}" created`);
+    } catch (err: any) {
+      toast.error(`Failed to create article: ${err.message}`);
+    } finally {
+      setCreatingArticle(false);
+    }
+  };
+
+  // Macro apply handler
+  const handleApplyMacro = async (macroId: string, macroName: string) => {
+    setApplyingMacro(macroId);
+    setShowCanned(false);
+
+    const macro = macros.find((m) => m.id === macroId);
+    const replyActions = macro?.actions.filter((a: any) => a.type === "reply") ?? [];
+    const authorName = user ? `${user.firstName} ${user.lastName ?? ""}`.trim() : "Agent";
+    const now = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+    const optimisticIds = replyActions.map((_: any, i: number) => `macro-opt-${macroId}-${i}-${Date.now()}`);
+
+    if (replyActions.length > 0) {
+      const optimisticMsgs: Message[] = replyActions.map((a: any, i: number) => ({
+        id: optimisticIds[i],
+        from: "agent" as const,
+        text: a.body,
+        time: now,
+        read: true,
+        author: authorName,
+      }));
+      setLocalMessages((prev) => [...prev, ...optimisticMsgs]);
+    }
+
+    try {
+      await api.macros.apply(macroId, conversation.id);
+      toast.success(`Macro "${macroName}" applied`);
+    } catch (err: any) {
+      if (optimisticIds.length > 0) {
+        setLocalMessages((prev) => prev.filter((m) => !optimisticIds.includes(m.id)));
+      }
+      toast.error(`Failed to apply macro: ${err.message}`);
+    } finally {
+      setApplyingMacro(null);
+    }
+  };
+
+  // Article insert handler
+  const handleInsertArticle = (article: { title: string; url: string }) => {
+    setDraft((d) => d + `\n\nHelpful article: ${article.title} — ${article.url}`);
+    setShowArticles(false);
+    toast.success("Article inserted into reply");
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) { toast.error("File must be under 10 MB"); return; }
+    setAttachedFiles((prev) => [...prev, file]);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
   const runMcp = () => {
     if (!suggested) return;
     setMcpResult(getMcpResponse(suggested, conversation.customer));
@@ -235,7 +417,6 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
             {(() => {
               const n = conversation.customer.name;
               const c = conversation.customer.company;
-              // Don't show company if it's just the email domain already visible in the name
               const showCompany = c && c !== "Unknown" && !(n.includes("@") && n.endsWith(`@${c}`));
               return <span>with {n}{showCompany ? ` · ${c}` : ""}</span>;
             })()}
@@ -254,9 +435,94 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
               {slaLeft === null ? "SLA Met" : slaLeft === 0 ? "SLA BREACHED" : `SLA ${slaLeft}m left`}
             </span>
           </div>
+          {/* Tags row */}
+          <div className="mt-1.5 flex flex-wrap items-center gap-1">
+            {convTags.map((tag) => (
+              <span key={tag.id} className="inline-flex items-center gap-0.5 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
+                #{tag.name}
+                <button onClick={() => handleRemoveTag(tag.id)} className="ml-0.5 rounded-full hover:text-danger focus:outline-none" aria-label={`Remove ${tag.name}`}>
+                  <X className="h-2.5 w-2.5" />
+                </button>
+              </span>
+            ))}
+            <div className="relative">
+              <button
+                onClick={() => setShowTagPicker((v) => !v)}
+                className="inline-flex items-center gap-0.5 rounded-full border border-dashed border-border px-2 py-0.5 text-[10px] text-muted-foreground hover:border-primary/50 hover:text-primary"
+                title="Add tag"
+              >
+                <Plus className="h-2.5 w-2.5" /> Tag
+              </button>
+              {showTagPicker && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => { setShowTagPicker(false); setNewTagName(""); }} />
+                  <div className="absolute left-0 top-full z-50 mt-1 w-48 rounded-lg border border-border bg-card shadow-lg">
+                    <div className="px-2 py-1.5 text-[10px] font-semibold uppercase text-muted-foreground">Add tag</div>
+                    <div className="max-h-40 overflow-y-auto pb-1">
+                      {allTags.filter((t) => !convTags.some((ct) => ct.id === t.id)).map((tag) => (
+                        <button
+                          key={tag.id}
+                          onClick={() => handleAddTag(tag)}
+                          className="block w-full px-3 py-1 text-left text-xs hover:bg-muted"
+                        >
+                          #{tag.name}
+                        </button>
+                      ))}
+                      {allTags.filter((t) => !convTags.some((ct) => ct.id === t.id)).length === 0 && (
+                        <div className="px-3 pb-1 text-[11px] text-muted-foreground">No existing tags</div>
+                      )}
+                    </div>
+                    <div className="border-t border-border px-2 py-1.5">
+                      <div className="mb-1 text-[10px] font-semibold uppercase text-muted-foreground">Create new</div>
+                      <div className="flex gap-1">
+                        <input
+                          autoFocus
+                          value={newTagName}
+                          onChange={(e) => setNewTagName(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleCreateTag(); } e.stopPropagation(); }}
+                          placeholder="Tag name…"
+                          className="min-w-0 flex-1 rounded border border-border bg-background px-2 py-1 text-xs focus:border-primary/50 focus:outline-none"
+                        />
+                        <button
+                          onClick={handleCreateTag}
+                          disabled={!newTagName.trim() || creatingTag}
+                          className="rounded bg-primary px-2 py-1 text-[10px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                        >
+                          {creatingTag ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
         </div>
         <div className="flex items-center gap-1">
           <IconBtn label="Reassign"><UserPlus className="h-4 w-4" /></IconBtn>
+          {/* Snooze */}
+          <div className="relative">
+            {showSnoozeMenu && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setShowSnoozeMenu(false)} />
+                <div className="absolute right-0 top-full z-50 mt-1 w-40 rounded-lg border border-border bg-card shadow-lg">
+                  <div className="px-3 py-1.5 text-[10px] font-semibold uppercase text-muted-foreground">Snooze until</div>
+                  {SNOOZE_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.label}
+                      onClick={() => { setShowSnoozeMenu(false); onSnooze?.(opt.getTime()); }}
+                      className="block w-full px-3 py-1.5 text-left text-xs hover:bg-muted"
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+            <IconBtn label="Snooze" onClick={() => setShowSnoozeMenu((v) => !v)}>
+              <BellOff className="h-4 w-4" />
+            </IconBtn>
+          </div>
           {conversation.status === "closed" ? (
             <IconBtn label="Reopen" onClick={() => { onStatusChange?.("open"); toast.success("Conversation reopened"); }}>
               <RotateCcw className="h-4 w-4" />
@@ -269,6 +535,21 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
           <IconBtn label="More"><MoreHorizontal className="h-4 w-4" /></IconBtn>
         </div>
       </div>
+
+      {/* Snoozed banner */}
+      {conversation.status === "pending" && conversation.snoozedUntil && (
+        <div className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-300 md:px-6">
+          <BellOff className="h-3.5 w-3.5 shrink-0" />
+          <span>
+            Snoozed until{" "}
+            <strong>
+              {new Date(conversation.snoozedUntil * 1000).toLocaleString(undefined, {
+                month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+              })}
+            </strong>
+          </span>
+        </div>
+      )}
 
       {/* Suggested diagnostic */}
       {suggested && (
@@ -398,30 +679,117 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
           </div>
         )}
         {showCanned && (
-          <div className="mb-2 rounded-md border border-border bg-background p-1.5">
-            <div className="mb-1 px-1 text-[10px] font-semibold uppercase text-muted-foreground">Canned responses</div>
-            <div className="max-h-40 overflow-y-auto">
-              {cannedResponses.map((r) => (
-                <button key={r.id} onClick={() => { setDraft(r.body.replace("{name}", conversation.customer.name.split(" ")[0])); setShowCanned(false); }}
-                  className="block w-full rounded px-2 py-1 text-left text-xs hover:bg-muted">
-                  <div className="font-medium">{r.title}</div>
-                  <div className="truncate text-[10px] text-muted-foreground">{r.body}</div>
-                </button>
-              ))}
+          <>
+            <div className="fixed inset-0 z-40" onClick={() => setShowCanned(false)} />
+            <div className="relative z-50 mb-2 rounded-md border border-border bg-background p-1.5">
+              <div className="mb-1 px-1 text-[10px] font-semibold uppercase text-muted-foreground">Macros</div>
+              {macrosLoading ? (
+                <div className="flex items-center gap-1.5 px-2 py-2 text-[11px] text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin" /> Loading macros…
+                </div>
+              ) : macros.length === 0 ? (
+                <div className="px-2 py-2 text-[11px] text-muted-foreground">No macros available</div>
+              ) : (
+                <div className="max-h-52 overflow-y-auto">
+                  {macros.map((m) => (
+                    <button
+                      key={m.id}
+                      onClick={() => handleApplyMacro(m.id, m.name)}
+                      disabled={applyingMacro === m.id}
+                      className="flex w-full cursor-pointer items-start gap-2 rounded px-2 py-1.5 text-left hover:bg-muted disabled:opacity-50"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs font-medium">{m.name}</div>
+                        {m.description && <div className="truncate text-[10px] text-muted-foreground">{m.description}</div>}
+                        <div className="mt-0.5 flex flex-wrap gap-1">
+                          {m.actions.map((a: any, i: number) => (
+                            <span key={i} className="rounded bg-muted px-1 py-0 text-[9px] font-medium text-muted-foreground">
+                              {a.type === "reply" ? "Reply" : a.type === "status" ? `Set ${a.value}` : a.type === "tag" ? "Add tag" : a.type}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                      {applyingMacro === m.id && <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-primary" />}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-          </div>
+          </>
         )}
         {showArticles && (
-          <div className="mb-2 rounded-md border border-border bg-background p-1.5">
-            <div className="mb-1 px-1 text-[10px] font-semibold uppercase text-muted-foreground">Suggested articles</div>
-            {helpArticles.map((a) => (
-              <button key={a.id} onClick={() => { setDraft((d) => d + `\n\nHelpful article: ${a.title} — ${a.url}`); setShowArticles(false); }}
-                className="flex w-full items-center justify-between rounded px-2 py-1 text-left text-xs hover:bg-muted">
-                <span className="flex items-center gap-1.5"><BookOpen className="h-3 w-3 text-primary" />{a.title}</span>
-                <span className="text-[10px] text-muted-foreground">Insert</span>
-              </button>
-            ))}
-          </div>
+          <>
+            <div className="fixed inset-0 z-40" onClick={() => { setShowArticles(false); setShowNewArticle(false); }} />
+            <div className="relative z-50 mb-2 rounded-md border border-border bg-background p-1.5">
+              <div className="mb-1 flex items-center justify-between px-1">
+                <span className="text-[10px] font-semibold uppercase text-muted-foreground">Articles</span>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setShowNewArticle((v) => !v); }}
+                  className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-primary hover:bg-primary/10"
+                >
+                  <Plus className="h-3 w-3" /> New
+                </button>
+              </div>
+              {showNewArticle && (
+                <div className="mb-2 rounded-md border border-border bg-muted/40 p-2" onClick={(e) => e.stopPropagation()}>
+                  <div className="mb-1.5 text-[10px] font-semibold uppercase text-muted-foreground">New article</div>
+                  <input
+                    autoFocus
+                    value={newArticleTitle}
+                    onChange={(e) => setNewArticleTitle(e.target.value)}
+                    placeholder="Title…"
+                    className="mb-1.5 w-full rounded border border-border bg-background px-2 py-1 text-xs focus:border-primary/50 focus:outline-none"
+                  />
+                  <textarea
+                    value={newArticleBody}
+                    onChange={(e) => setNewArticleBody(e.target.value)}
+                    placeholder="Article body (plain text or HTML)…"
+                    rows={4}
+                    className="mb-1.5 w-full resize-none rounded border border-border bg-background px-2 py-1 text-xs focus:border-primary/50 focus:outline-none"
+                  />
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1">
+                      {(["published", "draft"] as const).map((s) => (
+                        <button
+                          key={s}
+                          onClick={() => setNewArticleState(s)}
+                          className={cn("rounded border px-2 py-0.5 text-[10px] font-medium capitalize transition",
+                            newArticleState === s ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:border-primary/40")}
+                        >{s}</button>
+                      ))}
+                    </div>
+                    <div className="flex gap-1">
+                      <button onClick={() => setShowNewArticle(false)} className="rounded px-2 py-0.5 text-[10px] text-muted-foreground hover:bg-muted">Cancel</button>
+                      <button
+                        onClick={handleCreateArticle}
+                        disabled={!newArticleTitle.trim() || !newArticleBody.trim() || creatingArticle}
+                        className="inline-flex items-center gap-1 rounded bg-primary px-2 py-0.5 text-[10px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                      >
+                        {creatingArticle ? <Loader2 className="h-3 w-3 animate-spin" /> : "Publish"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {articlesLoading ? (
+                <div className="flex items-center gap-1.5 px-2 py-2 text-[11px] text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin" /> Loading articles…
+                </div>
+              ) : articles.length === 0 ? (
+                <div className="px-2 py-2 text-[11px] text-muted-foreground">No articles yet — create one above</div>
+              ) : (
+                <div className="max-h-44 overflow-y-auto">
+                  {articles.map((a) => (
+                    <button key={a.id} onClick={() => handleInsertArticle(a)}
+                      className="flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs hover:bg-muted">
+                      <span className="flex items-center gap-1.5 min-w-0"><BookOpen className="h-3 w-3 shrink-0 text-primary" /><span className="truncate">{a.title}</span></span>
+                      <span className="ml-2 shrink-0 text-[10px] text-muted-foreground">Insert</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </>
         )}
         {toneCheck && (
           <div className="mb-2 flex items-start gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs">
@@ -437,6 +805,28 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
             <div className="mb-1 flex items-center gap-1 font-medium text-primary"><Languages className="h-3 w-3" /> Translation preview · {LANG_LABELS[translatePreview.lang]}</div>
             <p className="leading-relaxed text-foreground/85">{translatePreview.text}</p>
             <button onClick={() => setTranslatePreview(null)} className="mt-1 text-[10px] text-muted-foreground hover:text-foreground">Use original instead</button>
+          </div>
+        )}
+        {/* Hidden file input */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*,application/pdf,.doc,.docx,.txt,.csv,.xls,.xlsx"
+          className="hidden"
+          onChange={handleFileChange}
+        />
+        {/* Attachment previews */}
+        {attachedFiles.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {attachedFiles.map((f, i) => (
+              <div key={i} className="inline-flex items-center gap-1 rounded-md border border-border bg-muted px-2 py-1 text-[11px]">
+                <Paperclip className="h-3 w-3 text-muted-foreground" />
+                <span className="max-w-[120px] truncate">{f.name}</span>
+                <button onClick={() => setAttachedFiles((prev) => prev.filter((_, j) => j !== i))} className="ml-0.5 text-muted-foreground hover:text-danger">
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
           </div>
         )}
         <div className="rounded-lg border border-border bg-background focus-within:border-primary/60 focus-within:ring-2 focus-within:ring-primary/15">
@@ -461,12 +851,111 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
               <ComposerBtn onClick={() => { setShowCanned(!showCanned); setShowArticles(false); }}><FileText className="h-3.5 w-3.5" /> Macros</ComposerBtn>
               <ComposerBtn onClick={() => { setShowArticles(!showArticles); setShowCanned(false); }}><BookOpen className="h-3.5 w-3.5" /> Articles</ComposerBtn>
               <ComposerBtn onClick={() => setShowNote(true)}><StickyNote className="h-3.5 w-3.5 text-warning" /> Note</ComposerBtn>
+              <ComposerBtn onClick={() => fileInputRef.current?.click()}>
+                <Paperclip className="h-3.5 w-3.5" />
+              </ComposerBtn>
               <ComposerBtn onClick={() => toast("Mention @teammate inside a note")}><AtSign className="h-3.5 w-3.5" /></ComposerBtn>
             </div>
-            <button onClick={send} disabled={!draft.trim() || sending}
-              className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition hover:bg-primary/90 disabled:opacity-40">
-              Send <SendHorizonal className="h-3.5 w-3.5" />
-            </button>
+            <div className="relative flex items-center gap-1.5">
+              {/* Keyboard shortcuts popover */}
+              {showShortcutsPopover && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowShortcutsPopover(false)} />
+                  <div className="absolute bottom-full right-0 mb-2 z-50 w-80 rounded-xl border border-border bg-card shadow-xl">
+                  <div className="flex items-center gap-2 border-b border-border px-3 py-2.5">
+                    <Keyboard className="h-3.5 w-3.5 text-primary" />
+                    <span className="text-[11px] font-semibold">Keyboard shortcuts</span>
+                    <span className="ml-auto text-[10px] text-muted-foreground">Outside input fields</span>
+                  </div>
+                  <div className="max-h-80 overflow-y-auto px-3 py-2">
+                    {[
+                      {
+                        section: "Reply & compose",
+                        items: [
+                          ["R", "Focus reply box"],
+                          ["Enter", "Send reply"],
+                          ["Shift + Enter", "New line in reply"],
+                          ["Esc", "Clear draft / close panels"],
+                        ],
+                      },
+                      {
+                        section: "AI tools",
+                        items: [
+                          ["A", "AI auto-fill draft"],
+                          ["T", "Tone check on draft"],
+                          ["L", "Translate draft to customer's language"],
+                        ],
+                      },
+                      {
+                        section: "Panels & actions",
+                        items: [
+                          ["M", "Open macros / canned responses"],
+                          ["N", "Add internal note"],
+                          ["C", "Open ClickUp modal"],
+                          ["E", "Resolve or reopen conversation"],
+                        ],
+                      },
+                      {
+                        section: "Conversation list",
+                        items: [
+                          ["J / ↓", "Next conversation"],
+                          ["K / ↑", "Previous conversation"],
+                          ["/", "Focus search"],
+                          ["1", "Tab — All conversations"],
+                          ["2", "Tab — Open"],
+                          ["3", "Tab — Assigned to me"],
+                          ["4", "Tab — Pending"],
+                          ["5", "Tab — Closed"],
+                        ],
+                      },
+                      {
+                        section: "Navigation",
+                        items: [
+                          ["⌘ 1", "Go to Inbox"],
+                          ["⌘ 2", "Go to Analytics"],
+                          ["⌘ 3", "Go to Alerts"],
+                          ["⌘ 4", "Go to Audit"],
+                          ["⌘ B", "Toggle sidebar"],
+                          ["?", "Show / hide this panel"],
+                        ],
+                      },
+                    ].map(({ section, items }) => (
+                      <div key={section} className="mb-3">
+                        <div className="mb-1.5 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/60">{section}</div>
+                        <div className="space-y-0.5">
+                          {items.map(([key, desc]) => (
+                            <div key={key} className="flex items-center justify-between gap-3 rounded-md px-1.5 py-1 text-xs hover:bg-muted/50">
+                              <span className="text-foreground/75">{desc}</span>
+                              <kbd className="shrink-0 rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-foreground/80">{key}</kbd>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="border-t border-border px-3 py-2 text-[10px] text-muted-foreground">
+                    Press <kbd className="rounded border border-border bg-muted px-1 font-mono text-[9px]">Esc</kbd> or click outside to close
+                  </div>
+                </div>
+                </>
+              )}
+              <button
+                onClick={() => setShowShortcutsPopover((v) => !v)}
+                title="Keyboard shortcuts"
+                className={cn(
+                  "inline-flex h-7 w-7 items-center justify-center rounded-md transition",
+                  showShortcutsPopover
+                    ? "bg-primary/10 text-primary"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                )}
+              >
+                <Keyboard className="h-3.5 w-3.5" />
+              </button>
+              <button onClick={send} disabled={(!draft.trim() && !attachedFiles.length) || sending}
+                className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition hover:bg-primary/90 disabled:opacity-40">
+                Send <SendHorizonal className="h-3.5 w-3.5" />
+              </button>
+            </div>
           </div>
         </div>
 

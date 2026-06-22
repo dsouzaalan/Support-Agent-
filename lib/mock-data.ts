@@ -94,6 +94,8 @@ export interface Conversation {
   priorityScore: number;
   viewers?: string[];
   triggerFlags?: string[];
+  tags?: { id: string; name: string }[];
+  snoozedUntil?: number | null;
 }
 
 const baseMessages = (name: string): Message[] => [
