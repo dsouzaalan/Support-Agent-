@@ -2,10 +2,18 @@
 
 import { AuditView } from "@/components/dashboard/SettingsView";
 import { usePermissions } from "@/hooks/usePermissions";
-import { Shield } from "lucide-react";
+import { Shield, Loader2 } from "lucide-react";
 
 export default function AuditPage() {
-  const { can } = usePermissions();
+  const { can, isLoading } = usePermissions();
+
+  if (isLoading) {
+    return (
+      <div className="flex h-full w-full items-center justify-center bg-background">
+        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
 
   if (!can("audit_logs:view")) {
     return (

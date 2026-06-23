@@ -4,6 +4,7 @@ import {
   createContext,
   useContext,
   useState,
+  useEffect,
   useCallback,
   ReactNode,
 } from "react";
@@ -65,10 +66,16 @@ function readStoredAuth(): { user: AuthUser | null; token: string | null } {
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const initial = readStoredAuth();
-  const [user, setUser] = useState<AuthUser | null>(initial.user);
-  const [token, setToken] = useState<string | null>(initial.token);
-  const [isLoading] = useState(false);
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    const { user: u, token: t } = readStoredAuth();
+    setUser(u);
+    setToken(t);
+    setIsLoading(false);
+  }, []);
 
   useSSE({
     onPermissionsUpdated: useCallback((authToken: string) => {

@@ -8,6 +8,7 @@ interface SSEHandlers {
   onConversationUpdate?: (conversation: Conversation) => void;
   onNewConversation?: (conversation: Conversation) => void;
   onPermissionsUpdated?: (authToken: string) => void;
+  onAuditLogNew?: (log: any) => void;
 }
 
 export function useSSE(handlers: SSEHandlers) {
@@ -42,6 +43,13 @@ export function useSSE(handlers: SSEHandlers) {
         try {
           const { authToken } = JSON.parse(e.data) as { authToken: string };
           handlersRef.current.onPermissionsUpdated?.(authToken);
+        } catch {}
+      });
+
+      es.addEventListener("audit_log:new", (e: MessageEvent) => {
+        try {
+          const { log } = JSON.parse(e.data);
+          handlersRef.current.onAuditLogNew?.(log);
         } catch {}
       });
 

@@ -163,6 +163,29 @@ export const api = {
       apiFetch(`/agents/${id}/permissions`, { method: 'PATCH', body: JSON.stringify({ key, granted }) }),
   },
 
+  auditLogs: {
+    list: (params?: {
+      agentId?: string;
+      action?: string;
+      targetId?: string;
+      from?: string;
+      to?: string;
+      page?: number;
+      perPage?: number;
+    }) => {
+      const q = new URLSearchParams();
+      if (params?.agentId)  q.set('agentId',  params.agentId);
+      if (params?.action)   q.set('action',   params.action);
+      if (params?.targetId) q.set('targetId', params.targetId);
+      if (params?.from)     q.set('from',     params.from);
+      if (params?.to)       q.set('to',       params.to);
+      if (params?.page)     q.set('page',     String(params.page));
+      if (params?.perPage)  q.set('perPage',  String(params.perPage));
+      const qs = q.toString();
+      return apiFetch(`/audit-logs${qs ? `?${qs}` : ''}`);
+    },
+  },
+
   sseUrl: () => {
     const token = getToken();
     return `${API_BASE}/api/v1/events${token ? `?token=${encodeURIComponent(token)}` : ''}`;
