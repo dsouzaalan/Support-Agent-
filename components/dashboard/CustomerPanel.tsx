@@ -9,7 +9,7 @@ import {
   TrendingUp, TrendingDown, Minus, AlertTriangle, CheckCircle2, XCircle,
   Mail, Globe, Zap, CreditCard, ExternalLink, BarChart3, Sparkles,
   ArrowRight, Loader2, Plus, X, ShieldAlert, History, Package,
-  Send, Pencil, Trash2,
+  Send, Pencil, Trash2, Clock, Monitor, AlertOctagon,
 } from "lucide-react";
 
 const CURRENT_AGENT = { id: "me", name: "Riley Park", isAdmin: false };
@@ -105,6 +105,52 @@ function Identity({ customer, tags, setTags, clickupTicket, conversationTags }: 
           </button>
         )}
       </div>
+      {/* Contact details from Intercom */}
+      <div className="mt-3 space-y-1">
+        {customer.email && (
+          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <Mail className="h-3 w-3 shrink-0" />
+            <span className="truncate">{customer.email}</span>
+            {customer.hasHardBounced && (
+              <span title="Hard bounced — email delivery blocked">
+                <AlertOctagon className="h-3 w-3 text-danger" />
+              </span>
+            )}
+            {customer.unsubscribedFromEmails && (
+              <span className="rounded bg-warning/15 px-1 text-[9px] font-semibold text-warning">unsub</span>
+            )}
+          </div>
+        )}
+        {customer.timezone && (
+          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <Clock className="h-3 w-3 shrink-0" />
+            <span className="truncate">
+              {customer.timezone}{customer.localTime ? ` · ${customer.localTime}` : ''}
+            </span>
+          </div>
+        )}
+        {(customer.browser || customer.os) && (
+          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <Monitor className="h-3 w-3 shrink-0" />
+            <span className="truncate">
+              {[customer.browser, customer.os].filter(Boolean).join(' · ')}
+            </span>
+          </div>
+        )}
+        {customer.language && customer.language !== 'en' && (
+          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <Globe className="h-3 w-3 shrink-0" />
+            <span>{customer.language.toUpperCase()}</span>
+          </div>
+        )}
+        {customer.lastLogin && customer.lastLogin !== 'Unknown' && (
+          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <CheckCircle2 className="h-3 w-3 shrink-0 text-success" />
+            <span>Last seen {customer.lastLogin}</span>
+          </div>
+        )}
+      </div>
+
       {conversationTags && conversationTags.length > 0 && (
         <div className="mt-2">
           <div className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground/60">Conversation tags</div>
@@ -316,12 +362,19 @@ function PastConvos({ customer }: { customer: Customer }) {
         <div className="mt-2 space-y-1">
           {customer.pastConversations.length === 0 && <div className="text-[11px] text-muted-foreground">No history.</div>}
           {customer.pastConversations.map((p) => (
-            <div key={p.id} className="rounded-md border border-border bg-background px-2.5 py-1.5 text-[11px]">
-              <div className="flex items-center justify-between">
-                <span className="font-medium text-foreground/85">{p.subject}</span>
-                <span className="text-muted-foreground">{p.date}</span>
+            <div key={p.id} className="rounded-md border border-border bg-background px-2.5 py-2 text-[11px]">
+              <p className="font-medium leading-snug text-foreground/85 line-clamp-2">{p.subject}</p>
+              <div className="mt-1.5 flex items-center gap-1.5">
+                <span className={cn(
+                  "rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide",
+                  p.outcome === "Resolved" && "bg-success/15 text-success",
+                  p.outcome === "Snoozed"  && "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
+                  p.outcome === "Open"     && "bg-primary/10 text-primary",
+                )}>
+                  {p.outcome}
+                </span>
+                {p.date && <span className="text-[10px] text-muted-foreground">{p.date}</span>}
               </div>
-              <div className="text-muted-foreground">{p.outcome}</div>
             </div>
           ))}
         </div>

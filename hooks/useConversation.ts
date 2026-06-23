@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { api } from "@/lib/api";
 import type { Conversation } from "@/lib/mock-data";
+import { useConversationsContext } from "@/contexts/ConversationsContext";
 
 interface UseConversationReturn {
   conversation: Conversation | null;
@@ -18,6 +19,7 @@ export function useConversation(id: string | null): UseConversationReturn {
   const [error, setError] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
   const mounted = useRef(true);
+  const { upsertConversation } = useConversationsContext();
 
   useEffect(() => {
     mounted.current = true;
@@ -37,7 +39,11 @@ export function useConversation(id: string | null): UseConversationReturn {
     api.conversations.get(id)
       .then((res) => {
         if (!cancelled && mounted.current) {
-          setConversation(res?.data ?? null);
+          const full = res?.data ?? null;
+          setConversation(full);
+          // Push rich data (notes, pastConversations) back into the shared list
+          // so the layout's CustomerPanel receives the full customer object
+          if (full) upsertConversation(full);
         }
       })
       .catch((err: any) => {

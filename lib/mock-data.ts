@@ -39,6 +39,7 @@ export interface Customer {
   id: string;
   name: string;
   initials: string;
+  email?: string;
   company: string;
   tier: TierType;
   status: AccountStatus;
@@ -47,6 +48,10 @@ export interface Customer {
   timezone: string;
   localTime: string;
   language: string;
+  browser?: string;
+  os?: string;
+  hasHardBounced?: boolean;
+  unsubscribedFromEmails?: boolean;
   workspaces: number;
   mailboxes: number;
   mailboxesDisconnected: number;
