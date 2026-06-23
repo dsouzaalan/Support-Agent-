@@ -1,15 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import type { Conversation, TierType } from "@/lib/mock-data";
 import { TierBadge } from "./CustomerPanel";
-import { Search, Circle, AlertTriangle, Filter, Bookmark, Eye, ChevronDown, SquarePen, X, Loader2, Send, User } from "lucide-react";
-import { api } from "@/lib/api";
-import { toast } from "sonner";
+import { Search, Circle, AlertTriangle, Filter, Bookmark, Eye, ChevronDown, Plus, UserCheck } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRouter } from "next/navigation";
 
-const TABS = ["All", "Open", "Assigned to Me", "Pending", "Closed"] as const;
+const TABS = ["All", "Open", "Assigned to Me", "Created by Me", "Pending", "Closed"] as const;
 type Tab = (typeof TABS)[number];
 type Sort = "priority" | "frustrated" | "waiting" | "sla" | "tier" | "newest";
 
@@ -44,10 +43,6 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
   const [unhealthyOnly, setUnhealthyOnly] = useState(false);
   const [savedView, setSavedView] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
-  const [showNewChat, setShowNewChat] = useState(false);
-
-  // ── modal render ──────────────────────────────────────────────────────
-  // (rendered at the aside level so it overlays the full panel)
 
   // Stable refs so the keyboard handler never goes stale
   const filteredRef = useRef<Conversation[]>([]);
@@ -90,8 +85,9 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
         case "1": setTab("All"); break;
         case "2": setTab("Open"); break;
         case "3": setTab("Assigned to Me"); break;
-        case "4": setTab("Pending"); break;
-        case "5": setTab("Closed"); break;
+        case "4": setTab("Created by Me"); break;
+        case "5": setTab("Pending"); break;
+        case "6": setTab("Closed"); break;
       }
     };
 
@@ -110,6 +106,7 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
         if (tab === "Open" && c.status !== "open") return false;
         if (tab === "Pending" && c.status !== "pending") return false;
         if (tab === "Assigned to Me" && !c.assignedToMe) return false;
+        if (tab === "Created by Me" && !c.createdByMe) return false;
       }
       if (tierFilter !== "all" && c.customer.tier !== tierFilter) return false;
       if (tagFilter !== "all" && !c.customer.tags.includes(tagFilter)) return false;
@@ -141,7 +138,7 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
   };
 
   return (
-    <aside className="relative flex h-full w-full flex-col border-r border-border bg-card">
+    <aside className="flex h-full w-full flex-col border-r border-border bg-card">
       <div className="border-b border-border px-4 py-3.5">
         <div className="flex items-center justify-between">
           <h1 className="text-base font-semibold tracking-tight">Inbox</h1>
@@ -154,11 +151,11 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
               Online
             </div>
             <button
-              onClick={() => setShowNewChat(true)}
+              onClick={() => router.push("/inbox/new")}
               title="New conversation"
               className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition"
             >
-              <SquarePen className="h-4 w-4" />
+              <Plus className="h-4 w-4" />
             </button>
           </div>
         </div>
@@ -220,7 +217,6 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
         </div>
       </div>
 
-      {showNewChat && <NewConversationModal onClose={() => setShowNewChat(false)} />}
     </aside>
   );
 }
@@ -271,6 +267,20 @@ function ConvRow({ c, selected, onSelect, clickupTicket }: { c: Conversation; se
           {closed && <span className="rounded bg-muted px-1 py-0 text-[9px] font-semibold uppercase text-muted-foreground">closed</span>}
           {snoozed && <span className="rounded bg-amber-100 px-1 py-0 text-[9px] font-semibold text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">{formatSnoozedUntil(c.snoozedUntil!)}</span>}
           {clickupTicket && <span className="rounded bg-primary/10 px-1 py-0 text-[9px] font-semibold text-primary">{clickupTicket}</span>}
+          {c.createdByMe && c.createdByAdmin && (
+            <TooltipProvider delayDuration={200}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex items-center gap-0.5 rounded bg-indigo-500/10 px-1 py-0 text-[9px] font-semibold text-indigo-500 dark:text-indigo-400">
+                    <UserCheck className="h-2.5 w-2.5" />started
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  <p className="text-xs">Started by {c.createdByAdmin.name}</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
           {c.firstResponsePending && <span className="rounded bg-danger/15 px-1 py-0 text-[9px] font-semibold uppercase text-danger">1st reply</span>}
           {c.triggerFlags?.includes("chargeback-risk") && (
             <span className="inline-flex items-center gap-0.5 rounded bg-danger/15 px-1 py-0 text-[9px] font-semibold text-danger">
@@ -329,148 +339,3 @@ function SelectFilter<T extends string>({ value, onChange, options, icon }: { va
   );
 }
 
-interface ContactResult {
-  id: string;
-  name: string;
-  email: string;
-  company: string;
-}
-
-function NewConversationModal({ onClose }: { onClose: () => void }) {
-  const router = useRouter();
-  const [searchQ, setSearchQ] = useState("");
-  const [contacts, setContacts] = useState<ContactResult[]>([]);
-  const [searching, setSearching] = useState(false);
-  const [selectedContact, setSelectedContact] = useState<ContactResult | null>(null);
-  const [body, setBody] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
-
-  const handleSearch = useCallback((value: string) => {
-    setSearchQ(value);
-    setSelectedContact(null);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (!value.trim()) { setContacts([]); return; }
-    debounceRef.current = setTimeout(async () => {
-      setSearching(true);
-      try {
-        const res = await api.contacts.search(value.trim());
-        setContacts(res.data ?? []);
-      } catch {
-        setContacts([]);
-      } finally {
-        setSearching(false);
-      }
-    }, 300);
-  }, []);
-
-  const handleSubmit = async () => {
-    if (!selectedContact) { toast.error("Please select a contact"); return; }
-    if (!body.trim()) { toast.error("Please enter a message"); return; }
-    setSubmitting(true);
-    try {
-      const res = await api.conversations.create(selectedContact.id, body.trim());
-      toast.success("Conversation started");
-      onClose();
-      if (res.data?.id) router.push(`/inbox/${res.data.id}`);
-    } catch (err: any) {
-      toast.error(`Failed: ${err.message}`);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <>
-      {/* backdrop */}
-      <div className="fixed inset-0 z-40 bg-black/30" onClick={onClose} />
-      {/* panel — anchored to the conversation list column */}
-      <div className="absolute inset-x-0 top-0 z-50 flex flex-col rounded-b-xl border border-border bg-card shadow-2xl" style={{ maxHeight: "90%" }}>
-        {/* header */}
-        <div className="flex items-center justify-between border-b border-border px-4 py-3">
-          <span className="text-sm font-semibold">New Conversation</span>
-          <button onClick={onClose} className="rounded-md p-1 text-muted-foreground hover:bg-muted">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        <div className="flex flex-col gap-3 overflow-y-auto p-4">
-          {/* contact search or selected */}
-          {selectedContact ? (
-            <div className="flex items-center gap-2 rounded-lg border border-primary/40 bg-primary/5 px-3 py-2">
-              <User className="h-4 w-4 shrink-0 text-primary" />
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium">{selectedContact.name}</div>
-                <div className="truncate text-xs text-muted-foreground">{selectedContact.email}</div>
-              </div>
-              <button onClick={() => { setSelectedContact(null); setSearchQ(""); }} className="shrink-0 text-muted-foreground hover:text-foreground">
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          ) : (
-            <div className="flex flex-col gap-1">
-              <div className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2">
-                <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                <input
-                  ref={inputRef}
-                  value={searchQ}
-                  onChange={(e) => handleSearch(e.target.value)}
-                  placeholder="Search by name or email…"
-                  className="w-full bg-transparent text-sm placeholder:text-muted-foreground focus:outline-none"
-                />
-                {searching && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />}
-              </div>
-
-              {contacts.length > 0 && (
-                <div className="max-h-48 overflow-y-auto rounded-lg border border-border bg-background">
-                  {contacts.map((c) => (
-                    <button
-                      key={c.id}
-                      onClick={() => { setSelectedContact(c); setSearchQ(c.name); setContacts([]); }}
-                      className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left hover:bg-muted/60 transition border-b border-border/50 last:border-b-0"
-                    >
-                      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
-                        {(c.name?.[0] ?? "?").toUpperCase()}
-                      </div>
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-medium">{c.name}</div>
-                        <div className="truncate text-xs text-muted-foreground">{c.email}{c.company ? ` · ${c.company}` : ""}</div>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              {searchQ.trim().length > 1 && !searching && contacts.length === 0 && (
-                <p className="px-1 text-xs text-muted-foreground">No contacts found.</p>
-              )}
-            </div>
-          )}
-
-          {/* message */}
-          <textarea
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            placeholder="Type your message…"
-            rows={5}
-            className="w-full resize-none rounded-lg border border-border bg-background px-3 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:border-primary/50"
-          />
-
-          <button
-            onClick={handleSubmit}
-            disabled={submitting || !selectedContact || !body.trim()}
-            className="flex items-center justify-center gap-2 rounded-lg bg-foreground px-4 py-2 text-sm font-medium text-background transition disabled:opacity-40 hover:opacity-90"
-          >
-            {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-            {submitting ? "Sending…" : "Send message"}
-          </button>
-        </div>
-      </div>
-    </>
-  );
-}

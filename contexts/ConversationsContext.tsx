@@ -8,6 +8,13 @@ import { toast } from "sonner";
 
 interface ClickUpLink { ticket: string; taskUrl: string }
 
+export interface ComposingContact {
+  id: string;
+  name: string;
+  email: string;
+  company: string;
+}
+
 interface ConversationsContextValue {
   conversations: Conversation[];
   loading: boolean;
@@ -19,6 +26,8 @@ interface ConversationsContextValue {
   clickupLinks: Record<string, ClickUpLink>;
   linkClickup: (id: string, ticket: string, taskUrl: string) => void;
   latestUpdate: Conversation | null;
+  composingContact: ComposingContact | null;
+  setComposingContact: (c: ComposingContact | null) => void;
 }
 
 const ConversationsContext = createContext<ConversationsContextValue | null>(null);
@@ -27,6 +36,7 @@ export function ConversationsProvider({ children }: { children: React.ReactNode 
   const { conversations, loading, error, refetch, upsertConversation, setLocalStatus, patchConversation } = useConversations();
   const [clickupLinks, setClickupLinks] = useState<Record<string, ClickUpLink>>({});
   const [latestUpdate, setLatestUpdate] = useState<Conversation | null>(null);
+  const [composingContact, setComposingContact] = useState<ComposingContact | null>(null);
 
   const linkClickup = useCallback((id: string, ticket: string, taskUrl: string) => {
     setClickupLinks((s) => ({ ...s, [id]: { ticket, taskUrl } }));
@@ -49,7 +59,7 @@ export function ConversationsProvider({ children }: { children: React.ReactNode 
 
   return (
     <ConversationsContext.Provider
-      value={{ conversations, loading, error, refetch, upsertConversation, setLocalStatus, patchConversation, clickupLinks, linkClickup, latestUpdate }}
+      value={{ conversations, loading, error, refetch, upsertConversation, setLocalStatus, patchConversation, clickupLinks, linkClickup, latestUpdate, composingContact, setComposingContact }}
     >
       {children}
     </ConversationsContext.Provider>

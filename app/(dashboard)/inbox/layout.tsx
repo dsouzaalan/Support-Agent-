@@ -7,13 +7,13 @@ import { ConversationsProvider, useConversationsContext } from "@/contexts/Conve
 import { ConversationList } from "@/components/dashboard/ConversationList";
 import { CustomerPanel } from "@/components/dashboard/CustomerPanel";
 import { cn } from "@/lib/utils";
-import { Loader2, AlertCircle, RefreshCw, ChevronLeft, MessageSquare } from "lucide-react";
+import { Loader2, AlertCircle, RefreshCw, ChevronLeft, UserCircle2, Mail, Building2 } from "lucide-react";
 
 function InboxContent({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { user } = useAuth();
-  const { conversations, loading, error, refetch, clickupLinks } = useConversationsContext();
+  const { conversations, loading, error, refetch, clickupLinks, composingContact } = useConversationsContext();
 
   const segments = pathname.split("/").filter(Boolean);
   const selectedId = segments[0] === "inbox" && segments.length > 1 ? segments[1] : "";
@@ -92,8 +92,8 @@ function InboxContent({ children }: { children: React.ReactNode }) {
         {children}
       </div>
 
-      {/* Column 3: Customer panel — desktop only, driven by selected conversation from list */}
-      {selectedConversation && (
+      {/* Column 3: Customer panel (conversation) or contact preview (new composer) */}
+      {selectedConversation ? (
         <div className="hidden lg:flex h-full flex-col overflow-hidden">
           <CustomerPanel
             customer={selectedConversation.customer}
@@ -101,7 +101,49 @@ function InboxContent({ children }: { children: React.ReactNode }) {
             conversationTags={selectedConversation.tags}
           />
         </div>
-      )}
+      ) : selectedId === "new" ? (
+        <div className="hidden lg:flex h-full flex-col overflow-hidden border-l border-border bg-card">
+          {composingContact ? (
+            /* Contact preview once user picks a recipient */
+            <div className="flex flex-col gap-0 overflow-y-auto">
+              {/* Header */}
+              <div className="flex shrink-0 flex-col items-center gap-3 border-b border-border px-5 py-6">
+                <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-xl font-semibold text-primary">
+                  {(composingContact.name?.[0] ?? "?").toUpperCase()}
+                </div>
+                <div className="text-center">
+                  <p className="text-sm font-semibold">{composingContact.name}</p>
+                  {composingContact.company && (
+                    <p className="mt-0.5 text-xs text-muted-foreground">{composingContact.company}</p>
+                  )}
+                </div>
+              </div>
+              {/* Details */}
+              <div className="flex flex-col gap-px px-5 py-4">
+                <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground/60">Contact details</p>
+                {composingContact.email && (
+                  <div className="flex items-center gap-2.5 rounded-md px-2 py-2 text-sm text-foreground/80 hover:bg-muted">
+                    <Mail className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <span className="truncate">{composingContact.email}</span>
+                  </div>
+                )}
+                {composingContact.company && (
+                  <div className="flex items-center gap-2.5 rounded-md px-2 py-2 text-sm text-foreground/80 hover:bg-muted">
+                    <Building2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <span className="truncate">{composingContact.company}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            /* Empty state before contact is selected */
+            <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-muted-foreground">
+              <UserCircle2 className="h-10 w-10 opacity-20" />
+              <p className="text-sm leading-relaxed">Search for a contact in the <strong className="font-medium text-foreground/60">To</strong> field to see their details here</p>
+            </div>
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }

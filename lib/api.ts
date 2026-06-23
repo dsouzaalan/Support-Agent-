@@ -84,10 +84,10 @@ export const api = {
         body: JSON.stringify({ snoozedUntil }),
       }),
 
-    create: (contactId: string, body: string) =>
+    create: (contactId: string, body: string, subject?: string, messageType: 'inapp' | 'email' = 'inapp') =>
       apiFetch('/conversations', {
         method: 'POST',
-        body: JSON.stringify({ contactId, body }),
+        body: JSON.stringify({ contactId, body, subject, messageType }),
       }),
   },
 

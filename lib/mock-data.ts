@@ -87,6 +87,8 @@ export interface Conversation {
   unread: boolean;
   status: ConvStatus;
   assignedToMe: boolean;
+  createdByMe?: boolean;
+  createdByAdmin?: { id: string; name: string } | null;
   messages: Message[];
   waitMinutes: number;
   slaMinutes: number;
