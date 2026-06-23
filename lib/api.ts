@@ -29,7 +29,9 @@ async function apiFetch(path: string, init: RequestInit = {}): Promise<any> {
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data?.message || `Request failed (${res.status})`);
+    const msg = data?.message || data?.error;
+    if (!msg && res.status === 403) throw new Error('Access denied');
+    throw new Error(msg || `Request failed (${res.status})`);
   }
   return data;
 }
@@ -101,6 +103,7 @@ export const api = {
     list: () => apiFetch('/tags'),
     create: (name: string) =>
       apiFetch('/tags', { method: 'POST', body: JSON.stringify({ name }) }),
+    delete: (id: string) => apiFetch(`/tags/${id}`, { method: 'DELETE' }),
     add: (conversationId: string, tagId: string) =>
       apiFetch(`/conversations/${conversationId}/tags`, {
         method: 'POST',
@@ -120,6 +123,7 @@ export const api = {
     },
     create: (payload: { title: string; body: string; state?: 'published' | 'draft' }) =>
       apiFetch('/articles', { method: 'POST', body: JSON.stringify(payload) }),
+    delete: (id: string) => apiFetch(`/articles/${id}`, { method: 'DELETE' }),
   },
 
   macros: {
@@ -146,6 +150,17 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(payload),
       }),
+  },
+
+  agents: {
+    list: () => apiFetch('/agents'),
+    permissionsMatrix: () => apiFetch('/agents/permissions-matrix'),
+    updateRole: (id: string, role: string) =>
+      apiFetch(`/agents/${id}/role`, { method: 'PATCH', body: JSON.stringify({ role }) }),
+    updateStatus: (id: string, status: string) =>
+      apiFetch(`/agents/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+    updatePermission: (id: string, key: string, granted: boolean) =>
+      apiFetch(`/agents/${id}/permissions`, { method: 'PATCH', body: JSON.stringify({ key, granted }) }),
   },
 
   sseUrl: () => {

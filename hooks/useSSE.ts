@@ -7,6 +7,7 @@ import type { Conversation } from "@/lib/mock-data";
 interface SSEHandlers {
   onConversationUpdate?: (conversation: Conversation) => void;
   onNewConversation?: (conversation: Conversation) => void;
+  onPermissionsUpdated?: (authToken: string) => void;
 }
 
 export function useSSE(handlers: SSEHandlers) {
@@ -34,6 +35,13 @@ export function useSSE(handlers: SSEHandlers) {
         try {
           const { conversation } = JSON.parse(e.data);
           handlersRef.current.onNewConversation?.(conversation);
+        } catch {}
+      });
+
+      es.addEventListener("permissions_updated", (e: MessageEvent) => {
+        try {
+          const { authToken } = JSON.parse(e.data) as { authToken: string };
+          handlersRef.current.onPermissionsUpdated?.(authToken);
         } catch {}
       });
 

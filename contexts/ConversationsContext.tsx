@@ -55,6 +55,11 @@ export function ConversationsProvider({ children }: { children: React.ReactNode 
       upsertConversation(conv);
       toast.success(`New conversation from ${conv.customer?.name ?? "customer"}`, { duration: 4000 });
     }, [upsertConversation]),
+    onPermissionsUpdated: useCallback(() => {
+      // AuthContext updates localStorage synchronously when it handles this same event.
+      // Wait one tick so the new token is in place before we refetch with updated permissions.
+      setTimeout(() => refetch(), 100);
+    }, [refetch]),
   });
 
   return (

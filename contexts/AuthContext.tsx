@@ -4,11 +4,13 @@ import {
   createContext,
   useContext,
   useState,
-  useEffect,
   useCallback,
   ReactNode,
 } from "react";
 import { api } from "@/lib/api";
+import { useSSE } from "@/hooks/useSSE";
+
+export type AgentRole = 'admin' | 'supervisor' | 'agent';
 
 export interface AuthUser {
   id: string;
@@ -16,6 +18,10 @@ export interface AuthUser {
   firstName: string;
   lastName: string | null;
   verified: boolean;
+  role: AgentRole;
+  status: 'active' | 'invited' | 'deactivated';
+  permissions: string[];
+  intercomAdminId: string | null;
 }
 
 interface AuthContextValue {
@@ -39,30 +45,48 @@ function decodeJwtUser(token: string): AuthUser | null {
       firstName: u.firstName,
       lastName: u.lastName ?? null,
       verified: u.verified,
+      role: u.role ?? 'agent',
+      status: u.status ?? 'active',
+      permissions: Array.isArray(u.permissions) ? u.permissions : [],
+      intercomAdminId: u.intercomAdminId ?? null,
     };
   } catch {
     return null;
   }
 }
 
-export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(null);
-  const [token, setToken] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+function readStoredAuth(): { user: AuthUser | null; token: string | null } {
+  if (typeof window === "undefined") return { user: null, token: null };
+  const stored = localStorage.getItem("auth_token");
+  if (!stored) return { user: null, token: null };
+  const u = decodeJwtUser(stored);
+  if (!u) { localStorage.removeItem("auth_token"); return { user: null, token: null }; }
+  return { user: u, token: stored };
+}
 
-  useEffect(() => {
-    const stored = localStorage.getItem("auth_token");
-    if (stored) {
-      const u = decodeJwtUser(stored);
-      if (u) {
-        setToken(stored);
-        setUser(u);
-      } else {
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const initial = readStoredAuth();
+  const [user, setUser] = useState<AuthUser | null>(initial.user);
+  const [token, setToken] = useState<string | null>(initial.token);
+  const [isLoading] = useState(false);
+
+  useSSE({
+    onPermissionsUpdated: useCallback((authToken: string) => {
+      const u = decodeJwtUser(authToken);
+      if (!u) return;
+      if (u.status === 'deactivated') {
         localStorage.removeItem("auth_token");
+        document.cookie = "auth-session=; path=/; max-age=0";
+        setToken(null);
+        setUser(null);
+        window.location.href = '/auth?reason=deactivated';
+        return;
       }
-    }
-    setIsLoading(false);
-  }, []);
+      localStorage.setItem("auth_token", authToken);
+      setToken(authToken);
+      setUser(u);
+    }, []),
+  });
 
   const login = useCallback(async (email: string, password: string) => {
     const res = await api.auth.login(email, password);

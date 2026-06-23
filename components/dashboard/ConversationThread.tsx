@@ -6,6 +6,7 @@ import type { Conversation, ConvStatus, Message } from "@/lib/mock-data";
 import { suggestedMcp, getMcpResponse } from "@/lib/mock-data";
 import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
+import { usePermissions } from "@/hooks/usePermissions";
 import {
   Sparkles, SendHorizonal, Wand2, ExternalLink,
   AlertTriangle, CheckCheck, MoreHorizontal, UserPlus, Languages,
@@ -50,6 +51,7 @@ const SNOOZE_OPTIONS = [
 
 export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl, onLinkClickup, onStatusChange, onTagsChange, onSnooze }: ThreadProps) {
   const { user } = useAuth();
+  const { can } = usePermissions();
   const currentUserName = user ? `${user.firstName} ${user.lastName ?? ""}`.trim() : "Agent";
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
@@ -105,6 +107,8 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
   onStatusChangeRef.current = onStatusChange;
   const draftRef = useRef(draft);
   draftRef.current = draft;
+  const canRef = useRef(can);
+  canRef.current = can;
 
   useEffect(() => {
     setDraft(""); setToneCheck(null); setTranslatePreview(null);
@@ -168,15 +172,15 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
           break;
         case "n":
           e.preventDefault();
-          setShowNote(true);
+          if (canRef.current('notes:create')) setShowNote(true);
           break;
         case "m":
           e.preventDefault();
-          setShowCanned((v) => !v); setShowArticles(false);
+          if (canRef.current('macros:apply')) { setShowCanned((v) => !v); setShowArticles(false); }
           break;
         case "c":
           e.preventDefault();
-          setClickupOpen(true);
+          if (canRef.current('clickup:link')) setClickupOpen(true);
           break;
       }
     };
@@ -374,7 +378,7 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
     toast.success("MCP results inserted in customer-friendly format");
   };
   const addNote = async () => {
-    if (!noteVal.trim() || sending) return;
+    if (!noteVal.trim() || sending || !can('notes:create')) return;
     const body = noteVal.trim();
     const authorName = user ? `${user.firstName} ${user.lastName ?? ""}`.trim() : "Agent";
     setSending(true);
@@ -442,11 +446,14 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
             {convTags.map((tag) => (
               <span key={tag.id} className="inline-flex items-center gap-0.5 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
                 #{tag.name}
-                <button onClick={() => handleRemoveTag(tag.id)} className="ml-0.5 rounded-full hover:text-danger focus:outline-none" aria-label={`Remove ${tag.name}`}>
-                  <X className="h-2.5 w-2.5" />
-                </button>
+                {can('tags:apply') && (
+                  <button onClick={() => handleRemoveTag(tag.id)} className="ml-0.5 rounded-full hover:text-danger focus:outline-none" aria-label={`Remove ${tag.name}`}>
+                    <X className="h-2.5 w-2.5" />
+                  </button>
+                )}
               </span>
             ))}
+            {can('tags:apply') && (
             <div className="relative">
               <button
                 onClick={() => setShowTagPicker((v) => !v)}
@@ -474,58 +481,63 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
                         <div className="px-3 pb-1 text-[11px] text-muted-foreground">No existing tags</div>
                       )}
                     </div>
-                    <div className="border-t border-border px-2 py-1.5">
-                      <div className="mb-1 text-[10px] font-semibold uppercase text-muted-foreground">Create new</div>
-                      <div className="flex gap-1">
-                        <input
-                          autoFocus
-                          value={newTagName}
-                          onChange={(e) => setNewTagName(e.target.value)}
-                          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleCreateTag(); } e.stopPropagation(); }}
-                          placeholder="Tag name…"
-                          className="min-w-0 flex-1 rounded border border-border bg-background px-2 py-1 text-xs focus:border-primary/50 focus:outline-none"
-                        />
-                        <button
-                          onClick={handleCreateTag}
-                          disabled={!newTagName.trim() || creatingTag}
-                          className="rounded bg-primary px-2 py-1 text-[10px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-                        >
-                          {creatingTag ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
-                        </button>
+                    {can('tags:manage') && (
+                      <div className="border-t border-border px-2 py-1.5">
+                        <div className="mb-1 text-[10px] font-semibold uppercase text-muted-foreground">Create new</div>
+                        <div className="flex gap-1">
+                          <input
+                            autoFocus
+                            value={newTagName}
+                            onChange={(e) => setNewTagName(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleCreateTag(); } e.stopPropagation(); }}
+                            placeholder="Tag name…"
+                            className="min-w-0 flex-1 rounded border border-border bg-background px-2 py-1 text-xs focus:border-primary/50 focus:outline-none"
+                          />
+                          <button
+                            onClick={handleCreateTag}
+                            disabled={!newTagName.trim() || creatingTag}
+                            className="rounded bg-primary px-2 py-1 text-[10px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                          >
+                            {creatingTag ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+                          </button>
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </div>
                 </>
               )}
             </div>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-1">
-          <IconBtn label="Reassign"><UserPlus className="h-4 w-4" /></IconBtn>
+          {can('conversations:assign') && <IconBtn label="Reassign"><UserPlus className="h-4 w-4" /></IconBtn>}
           {/* Snooze */}
-          <div className="relative">
-            {showSnoozeMenu && (
-              <>
-                <div className="fixed inset-0 z-40" onClick={() => setShowSnoozeMenu(false)} />
-                <div className="absolute right-0 top-full z-50 mt-1 w-40 rounded-lg border border-border bg-card shadow-lg">
-                  <div className="px-3 py-1.5 text-[10px] font-semibold uppercase text-muted-foreground">Snooze until</div>
-                  {SNOOZE_OPTIONS.map((opt) => (
-                    <button
-                      key={opt.label}
-                      onClick={() => { setShowSnoozeMenu(false); onSnooze?.(opt.getTime()); }}
-                      className="block w-full px-3 py-1.5 text-left text-xs hover:bg-muted"
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
-            <IconBtn label="Snooze" onClick={() => setShowSnoozeMenu((v) => !v)}>
-              <BellOff className="h-4 w-4" />
-            </IconBtn>
-          </div>
-          {conversation.status === "closed" ? (
+          {can('conversations:status') && (
+            <div className="relative">
+              {showSnoozeMenu && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowSnoozeMenu(false)} />
+                  <div className="absolute right-0 top-full z-50 mt-1 w-40 rounded-lg border border-border bg-card shadow-lg">
+                    <div className="px-3 py-1.5 text-[10px] font-semibold uppercase text-muted-foreground">Snooze until</div>
+                    {SNOOZE_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.label}
+                        onClick={() => { setShowSnoozeMenu(false); onSnooze?.(opt.getTime()); }}
+                        className="block w-full px-3 py-1.5 text-left text-xs hover:bg-muted"
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+              <IconBtn label="Snooze" onClick={() => setShowSnoozeMenu((v) => !v)}>
+                <BellOff className="h-4 w-4" />
+              </IconBtn>
+            </div>
+          )}
+          {can('conversations:status') && (conversation.status === "closed" ? (
             <IconBtn label="Reopen" onClick={() => { onStatusChange?.("open"); toast.success("Conversation reopened"); }}>
               <RotateCcw className="h-4 w-4" />
             </IconBtn>
@@ -533,7 +545,7 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
             <IconBtn label="Mark resolved" onClick={() => { onStatusChange?.("closed"); toast.success("Marked resolved"); }}>
               <CheckCheck className="h-4 w-4" />
             </IconBtn>
-          )}
+          ))}
           <IconBtn label="More"><MoreHorizontal className="h-4 w-4" /></IconBtn>
         </div>
       </div>
@@ -595,7 +607,7 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-4 md:px-6 md:py-6">
         <div className="mx-auto flex max-w-2xl flex-col gap-4">
           {localMessages.map((m) => {
-            if (m.from === "note") return (
+            if (m.from === "note") return can('notes:view') ? (
               <div key={m.id} className="mx-auto w-full max-w-[88%] rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-xs">
                 <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-warning">
                   <StickyNote className="h-3 w-3" /> Internal note · {m.author} · {m.time}
@@ -613,7 +625,7 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
                 )}
                 <MessageAttachments attachments={m.attachments} isAgent={false} />
               </div>
-            );
+            ) : null;
             const translated = showTranslated[m.id];
             const langDifferent = m.from === "customer" && m.language && m.language !== AGENT_LANG;
             const isAgent = m.from === "agent";
@@ -680,7 +692,7 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
             </div>
           </div>
         )}
-        {showCanned && (
+        {showCanned && can('macros:apply') && (
           <>
             <div className="fixed inset-0 z-40" onClick={() => setShowCanned(false)} />
             <div className="relative z-50 mb-2 rounded-md border border-border bg-background p-1.5">
@@ -725,12 +737,14 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
             <div className="relative z-50 mb-2 rounded-md border border-border bg-background p-1.5">
               <div className="mb-1 flex items-center justify-between px-1">
                 <span className="text-[10px] font-semibold uppercase text-muted-foreground">Articles</span>
-                <button
-                  onClick={(e) => { e.stopPropagation(); setShowNewArticle((v) => !v); }}
-                  className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-primary hover:bg-primary/10"
-                >
-                  <Plus className="h-3 w-3" /> New
-                </button>
+                {can('articles:manage') && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setShowNewArticle((v) => !v); }}
+                    className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-primary hover:bg-primary/10"
+                  >
+                    <Plus className="h-3 w-3" /> New
+                  </button>
+                )}
               </div>
               {showNewArticle && (
                 <div className="mb-2 rounded-md border border-border bg-muted/40 p-2" onClick={(e) => e.stopPropagation()}>
@@ -831,32 +845,40 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
             ))}
           </div>
         )}
-        <div className="rounded-lg border border-border bg-background focus-within:border-primary/60 focus-within:ring-2 focus-within:ring-primary/15">
-          <textarea
-            ref={replyRef}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
-              if (e.key === "Escape") { setDraft(""); setToneCheck(null); setTranslatePreview(null); }
-            }}
-            placeholder="Write a reply… (Enter to send, Shift+Enter for newline)"
-            rows={3}
-            className="w-full resize-none bg-transparent px-3 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none" />
+        <div className={cn("rounded-lg border border-border bg-background", can('conversations:reply') && "focus-within:border-primary/60 focus-within:ring-2 focus-within:ring-primary/15")}>
+          {can('conversations:reply') ? (
+            <textarea
+              ref={replyRef}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+                if (e.key === "Escape") { setDraft(""); setToneCheck(null); setTranslatePreview(null); }
+              }}
+              placeholder="Write a reply… (Enter to send, Shift+Enter for newline)"
+              rows={3}
+              className="w-full resize-none bg-transparent px-3 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none" />
+          ) : (
+            <div className="px-3 py-4 text-sm text-muted-foreground">You don't have permission to reply to conversations.</div>
+          )}
           <div className="flex flex-wrap items-center justify-between gap-1 border-t border-border px-2 py-1.5">
             <div className="flex flex-wrap items-center gap-0.5">
-              <ComposerBtn onClick={autoFill} disabled={aiThinking}>
-                {aiThinking ? <><Sparkles className="h-3.5 w-3.5 animate-pulse text-primary" /> Drafting…</> : <><Sparkles className="h-3.5 w-3.5 text-primary" /> Auto-Fill</>}
-              </ComposerBtn>
-              <ComposerBtn onClick={runToneCheck}><Wand2 className="h-3.5 w-3.5" /> Tone</ComposerBtn>
-              <ComposerBtn onClick={translateReply}><Languages className="h-3.5 w-3.5" /> Translate</ComposerBtn>
-              <ComposerBtn onClick={() => { setShowCanned(!showCanned); setShowArticles(false); }}><FileText className="h-3.5 w-3.5" /> Macros</ComposerBtn>
-              <ComposerBtn onClick={() => { setShowArticles(!showArticles); setShowCanned(false); }}><BookOpen className="h-3.5 w-3.5" /> Articles</ComposerBtn>
-              <ComposerBtn onClick={() => setShowNote(true)}><StickyNote className="h-3.5 w-3.5 text-warning" /> Note</ComposerBtn>
-              <ComposerBtn onClick={() => fileInputRef.current?.click()}>
-                <Paperclip className="h-3.5 w-3.5" />
-              </ComposerBtn>
-              <ComposerBtn onClick={() => toast("Mention @teammate inside a note")}><AtSign className="h-3.5 w-3.5" /></ComposerBtn>
+              {can('conversations:reply') && (
+                <ComposerBtn onClick={autoFill} disabled={aiThinking}>
+                  {aiThinking ? <><Sparkles className="h-3.5 w-3.5 animate-pulse text-primary" /> Drafting…</> : <><Sparkles className="h-3.5 w-3.5 text-primary" /> Auto-Fill</>}
+                </ComposerBtn>
+              )}
+              {can('conversations:reply') && <ComposerBtn onClick={runToneCheck}><Wand2 className="h-3.5 w-3.5" /> Tone</ComposerBtn>}
+              {can('conversations:reply') && <ComposerBtn onClick={translateReply}><Languages className="h-3.5 w-3.5" /> Translate</ComposerBtn>}
+              {can('macros:apply') && <ComposerBtn onClick={() => { setShowCanned(!showCanned); setShowArticles(false); }}><FileText className="h-3.5 w-3.5" /> Macros</ComposerBtn>}
+              {can('articles:view') && <ComposerBtn onClick={() => { setShowArticles(!showArticles); setShowCanned(false); }}><BookOpen className="h-3.5 w-3.5" /> Articles</ComposerBtn>}
+              {can('notes:create') && <ComposerBtn onClick={() => setShowNote(true)}><StickyNote className="h-3.5 w-3.5 text-warning" /> Note</ComposerBtn>}
+              {can('conversations:reply') && (
+                <ComposerBtn onClick={() => fileInputRef.current?.click()}>
+                  <Paperclip className="h-3.5 w-3.5" />
+                </ComposerBtn>
+              )}
+              {can('notes:create') && <ComposerBtn onClick={() => toast("Mention @teammate inside a note")}><AtSign className="h-3.5 w-3.5" /></ComposerBtn>}
             </div>
             <div className="relative flex items-center gap-1.5">
               {/* Keyboard shortcuts popover — fixed so it escapes overflow:hidden parents */}
@@ -966,7 +988,7 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
               >
                 <Keyboard className="h-3.5 w-3.5" />
               </button>
-              <button onClick={send} disabled={(!draft.trim() && !attachedFiles.length) || sending}
+              <button onClick={send} disabled={(!draft.trim() && !attachedFiles.length) || sending || !can('conversations:reply')}
                 className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition hover:bg-primary/90 disabled:opacity-40">
                 Send <SendHorizonal className="h-3.5 w-3.5" />
               </button>
@@ -978,9 +1000,11 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
         <div className="mt-3 flex flex-wrap gap-1.5">
           <QuickAction icon={<ExternalLink className="h-3 w-3" />} onClick={() => toast.success("One-click login token issued (15-min). Logged.")}>One-Click Login</QuickAction>
           <QuickAction icon={<CreditCard className="h-3 w-3" />} onClick={() => toast.success("Opening Stripe customer page. Logged.")}>One-Click Stripe</QuickAction>
-          <QuickAction icon={<ClipboardList className="h-3 w-3" />} onClick={() => setClickupOpen(true)}>
-            {clickupTicket ? `View ${clickupTicket}` : "Add to ClickUp"}
-          </QuickAction>
+          {can('clickup:link') && (
+            <QuickAction icon={<ClipboardList className="h-3 w-3" />} onClick={() => setClickupOpen(true)}>
+              {clickupTicket ? `View ${clickupTicket}` : "Add to ClickUp"}
+            </QuickAction>
+          )}
           <QuickAction icon={<AlertTriangle className="h-3 w-3" />} variant="warning" onClick={() => toast.success("Escalated to billing")}>Escalate</QuickAction>
         </div>
       </div>

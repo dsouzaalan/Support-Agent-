@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useAuth } from "@/contexts/AuthContext";
 import {
   Zap,
   Mail,
@@ -12,6 +13,8 @@ import {
   ArrowRight,
   CheckCircle2,
   Loader2,
+  ShieldOff,
+  AlertCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -30,11 +33,23 @@ const FEATURES = [
 
 export default function AuthPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const { login } = useAuth();
   const [tab, setTab] = useState<Tab>("signin");
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [error, setError] = useState("");
+  const [errorType, setErrorType] = useState<"deactivated" | "generic">("generic");
+  const [sessionBanner, setSessionBanner] = useState<"deactivated" | null>(null);
+
+  useEffect(() => {
+    if (searchParams.get("reason") === "deactivated") {
+      setSessionBanner("deactivated");
+      // Clean up the URL so a refresh doesn't re-show the banner
+      router.replace("/auth");
+    }
+  }, []);
 
   const [signInForm, setSignInForm] = useState({ email: "", password: "" });
   const [signUpForm, setSignUpForm] = useState({
@@ -48,6 +63,7 @@ export default function AuthPage() {
   function handleTabChange(next: Tab) {
     setTab(next);
     setError("");
+    setErrorType("generic");
   }
 
   async function handleSignIn(e: React.FormEvent) {
@@ -59,14 +75,17 @@ export default function AuthPage() {
     }
     setLoading(true);
     try {
-      const res = await api.auth.login(signInForm.email, signInForm.password);
-      const authToken: string = res?.data?.authToken;
-      if (!authToken) throw new Error("No auth token received from server.");
-      localStorage.setItem("auth_token", authToken);
-      document.cookie = "auth-session=true; path=/; SameSite=Strict";
+      await login(signInForm.email, signInForm.password);
       router.push("/");
     } catch (err: any) {
-      setError(err.message || "Login failed. Check your credentials.");
+      const msg: string = err.message || "";
+      if (msg.toLowerCase().includes("deactivated")) {
+        setErrorType("deactivated");
+        setError("Your account has been deactivated. Please contact your administrator.");
+      } else {
+        setErrorType("generic");
+        setError(msg || "Login failed. Check your credentials.");
+      }
       setLoading(false);
     }
   }
@@ -166,6 +185,18 @@ export default function AuthPage() {
             </p>
           </div>
 
+          {sessionBanner === "deactivated" && (
+            <div className="flex gap-3 rounded-xl border border-destructive/40 bg-destructive/8 px-4 py-3.5">
+              <ShieldOff className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
+              <div>
+                <p className="text-sm font-semibold text-destructive">Your account has been deactivated</p>
+                <p className="mt-0.5 text-xs text-destructive/75 leading-relaxed">
+                  An administrator has deactivated your account. Please contact your admin to regain access.
+                </p>
+              </div>
+            </div>
+          )}
+
           <div className="flex rounded-lg border border-border bg-muted p-1 gap-1">
             <button
               onClick={() => handleTabChange("signin")}
@@ -234,7 +265,22 @@ export default function AuthPage() {
                 </div>
               </div>
 
-              {error && <p className="text-sm text-destructive">{error}</p>}
+              {error && (
+                errorType === "deactivated" ? (
+                  <div className="flex gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3">
+                    <ShieldOff className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                    <div>
+                      <p className="text-sm font-semibold text-destructive">Account deactivated</p>
+                      <p className="mt-0.5 text-xs text-destructive/80">Your account has been deactivated. Please contact your administrator to regain access.</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2.5 rounded-lg border border-destructive/30 bg-destructive/5 px-3.5 py-2.5">
+                    <AlertCircle className="h-4 w-4 shrink-0 text-destructive" />
+                    <p className="text-sm text-destructive">{error}</p>
+                  </div>
+                )
+              )}
 
               <Button type="submit" className="w-full gap-2" disabled={loading}>
                 {loading ? (

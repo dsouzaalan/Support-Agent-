@@ -3,14 +3,16 @@
 import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
+import { usePermissions } from "@/hooks/usePermissions";
 import { cn } from "@/lib/utils";
 import { Toaster } from "@/components/ui/sonner";
-import { Inbox, BarChart3, Zap, Settings, HelpCircle, Bell, Shield, LogOut, X, Keyboard } from "lucide-react";
+import { Inbox, BarChart3, Zap, Settings, HelpCircle, Shield, LogOut, X, Keyboard, Users } from "lucide-react";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { logout } = useAuth();
+  const { can, isAdmin } = usePermissions();
   const [showShortcuts, setShowShortcuts] = useState(false);
 
   const handleSignOut = () => {
@@ -40,8 +42,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         switch (e.key) {
           case "1": e.preventDefault(); router.push("/inbox"); break;
           case "2": e.preventDefault(); router.push("/analytics"); break;
-          case "3": e.preventDefault(); router.push("/settings"); break;
+          case "3": e.preventDefault(); router.push("/team"); break;
           case "4": e.preventDefault(); router.push("/audit"); break;
+          case "5": e.preventDefault(); router.push("/settings"); break;
         }
       }
     };
@@ -60,12 +63,18 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </div>
         <RailBtn active={pathname.startsWith("/inbox")} onClick={() => router.push("/inbox")} icon={<Inbox className="h-4 w-4" />} label="Inbox [⌘1]" />
         <RailBtn active={pathname.startsWith("/analytics")} onClick={() => router.push("/analytics")} icon={<BarChart3 className="h-4 w-4" />} label="Analytics [⌘2]" />
-        <RailBtn active={pathname.startsWith("/settings")} onClick={() => router.push("/settings")} icon={<Bell className="h-4 w-4" />} label="Alerts [⌘3]" />
-        <RailBtn active={pathname.startsWith("/audit")} onClick={() => router.push("/audit")} icon={<Shield className="h-4 w-4" />} label="Audit [⌘4]" />
+        {can("agents:view") && (
+          <RailBtn active={pathname.startsWith("/team")} onClick={() => router.push("/team")} icon={<Users className="h-4 w-4" />} label="Team [⌘3]" />
+        )}
+        {can("audit_logs:view") && (
+          <RailBtn active={pathname.startsWith("/audit")} onClick={() => router.push("/audit")} icon={<Shield className="h-4 w-4" />} label="Audit [⌘4]" />
+        )}
         <div className="mt-auto flex flex-col gap-1">
           <RailBtn icon={<Keyboard className="h-4 w-4" />} label="Keyboard shortcuts [?]" onClick={() => setShowShortcuts(true)} />
           <RailBtn icon={<HelpCircle className="h-4 w-4" />} label="Help" />
-          <RailBtn icon={<Settings className="h-4 w-4" />} label="Settings" />
+          {(can("macros:manage") || can("tags:manage") || can("articles:manage") || isAdmin) && (
+            <RailBtn active={pathname.startsWith("/settings")} onClick={() => router.push("/settings")} icon={<Settings className="h-4 w-4" />} label="Settings [⌘5]" />
+          )}
           <RailBtn icon={<LogOut className="h-4 w-4" />} label="Sign Out" onClick={handleSignOut} />
         </div>
       </nav>
@@ -101,8 +110,9 @@ function ShortcutsHelp({ onClose }: { onClose: () => void }) {
       shortcuts: [
         ["⌘ 1", "Go to Inbox"],
         ["⌘ 2", "Go to Analytics"],
-        ["⌘ 3", "Go to Alerts"],
+        ["⌘ 3", "Go to Team"],
         ["⌘ 4", "Go to Audit"],
+        ["⌘ 5", "Go to Settings"],
         ["?", "Toggle this help"],
       ],
     },
