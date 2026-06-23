@@ -65,6 +65,8 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
   const [localMessages, setLocalMessages] = useState<Message[]>(conversation.messages);
   const [clickupOpen, setClickupOpen] = useState(false);
   const [showShortcutsPopover, setShowShortcutsPopover] = useState(false);
+  const [shortcutsPos, setShortcutsPos] = useState({ bottom: 0, right: 0 });
+  const shortcutsBtnRef = useRef<HTMLButtonElement>(null);
   const [showSnoozeMenu, setShowSnoozeMenu] = useState(false);
 
   // Tags
@@ -857,11 +859,14 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
               <ComposerBtn onClick={() => toast("Mention @teammate inside a note")}><AtSign className="h-3.5 w-3.5" /></ComposerBtn>
             </div>
             <div className="relative flex items-center gap-1.5">
-              {/* Keyboard shortcuts popover */}
+              {/* Keyboard shortcuts popover — fixed so it escapes overflow:hidden parents */}
               {showShortcutsPopover && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setShowShortcutsPopover(false)} />
-                  <div className="absolute bottom-full right-0 mb-2 z-50 w-80 rounded-xl border border-border bg-card shadow-xl">
+                  <div
+                    className="fixed z-50 w-80 rounded-xl border border-border bg-card shadow-xl"
+                    style={{ bottom: shortcutsPos.bottom, right: shortcutsPos.right }}
+                  >
                   <div className="flex items-center gap-2 border-b border-border px-3 py-2.5">
                     <Keyboard className="h-3.5 w-3.5 text-primary" />
                     <span className="text-[11px] font-semibold">Keyboard shortcuts</span>
@@ -940,7 +945,17 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
                 </>
               )}
               <button
-                onClick={() => setShowShortcutsPopover((v) => !v)}
+                ref={shortcutsBtnRef}
+                onClick={() => {
+                  if (!showShortcutsPopover && shortcutsBtnRef.current) {
+                    const rect = shortcutsBtnRef.current.getBoundingClientRect();
+                    setShortcutsPos({
+                      bottom: window.innerHeight - rect.top + 8,
+                      right: window.innerWidth - rect.right,
+                    });
+                  }
+                  setShowShortcutsPopover((v) => !v);
+                }}
                 title="Keyboard shortcuts"
                 className={cn(
                   "inline-flex h-7 w-7 items-center justify-center rounded-md transition",
