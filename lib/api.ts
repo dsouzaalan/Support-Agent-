@@ -89,6 +89,8 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ contactId, body, subject, messageType }),
       }),
+
+    search: (q: string) => apiFetch(`/conversations/search?q=${encodeURIComponent(q)}`),
   },
 
   contacts: {

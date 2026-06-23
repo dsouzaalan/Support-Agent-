@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import type { Conversation, TierType } from "@/lib/mock-data";
 import { TierBadge } from "./CustomerPanel";
-import { Search, Circle, AlertTriangle, Filter, Bookmark, Eye, ChevronDown, Plus, UserCheck } from "lucide-react";
+import { Search, Circle, AlertTriangle, Filter, Bookmark, Eye, ChevronDown, Plus, UserCheck, Loader2 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRouter } from "next/navigation";
+import { api } from "@/lib/api";
 
 const TABS = ["All", "Open", "Assigned to Me", "Created by Me", "Pending", "Closed"] as const;
 type Tab = (typeof TABS)[number];
@@ -37,6 +38,9 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
   const router = useRouter();
   const [tab, setTab] = useState<Tab>("All");
   const [q, setQ] = useState("");
+  const [apiResults, setApiResults] = useState<Conversation[] | null>(null);
+  const [apiSearching, setApiSearching] = useState(false);
+  const searchDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [sort, setSort] = useState<Sort>("priority");
   const [tierFilter, setTierFilter] = useState<TierType | "all">("all");
   const [tagFilter, setTagFilter] = useState<string | "all">("all");
@@ -95,12 +99,34 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
     return () => window.removeEventListener("keydown", handler);
   }, []);
 
+  // Debounced API search for queries 3+ chars — searches beyond the loaded 50
+  useEffect(() => {
+    if (searchDebounce.current) clearTimeout(searchDebounce.current);
+    if (q.trim().length < 3) { setApiResults(null); setApiSearching(false); return; }
+    setApiSearching(true);
+    searchDebounce.current = setTimeout(async () => {
+      try {
+        const res = await api.conversations.search(q.trim());
+        setApiResults(res?.data?.conversations ?? []);
+      } catch {
+        setApiResults(null);
+      } finally {
+        setApiSearching(false);
+      }
+    }, 400);
+    return () => { if (searchDebounce.current) clearTimeout(searchDebounce.current); };
+  }, [q]);
+
   const allTags = useMemo(() => Array.from(new Set(conversations.flatMap((c) => c.customer.tags))).sort(), [conversations]);
 
   const filtered = useMemo(() => {
-    let list = conversations.filter((c) => {
-      const searching = q.trim().length > 0;
-      if (!searching) {
+    // When we have API search results, use those as the base list instead of local conversations
+    const base = apiResults ?? conversations;
+    const qLow = q.trim().toLowerCase();
+    const isSearching = qLow.length > 0;
+
+    let list = base.filter((c) => {
+      if (!isSearching) {
         if (tab === "Closed" && c.status !== "closed") return false;
         if (tab !== "Closed" && c.status === "closed") return false;
         if (tab === "Open" && c.status !== "open") return false;
@@ -111,7 +137,15 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
       if (tierFilter !== "all" && c.customer.tier !== tierFilter) return false;
       if (tagFilter !== "all" && !c.customer.tags.includes(tagFilter)) return false;
       if (unhealthyOnly && c.customer.mailboxesDisconnected === 0 && c.customer.failedDomains === 0 && !c.customer.paymentExpired) return false;
-      if (q && !(c.customer.name.toLowerCase().includes(q.toLowerCase()) || c.subject.toLowerCase().includes(q.toLowerCase()))) return false;
+      // Local filter: match name, subject, preview, email (covers the loaded 50 for short queries)
+      if (isSearching && !apiResults) {
+        const matches =
+          c.customer.name.toLowerCase().includes(qLow) ||
+          c.subject.toLowerCase().includes(qLow) ||
+          (c.preview ?? "").toLowerCase().includes(qLow) ||
+          (c.customer.email ?? "").toLowerCase().includes(qLow);
+        if (!matches) return false;
+      }
       return true;
     });
     list = [...list].sort((a, b) => {
@@ -160,9 +194,10 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
           </div>
         </div>
         <div className="mt-3 flex items-center gap-2 rounded-md border border-border bg-background px-2.5 py-1.5">
-          <Search className="h-3.5 w-3.5 text-muted-foreground" />
+          <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
           <input ref={searchRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search conversations  [/]"
             className="w-full bg-transparent text-sm placeholder:text-muted-foreground focus:outline-none" />
+          {apiSearching && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />}
         </div>
         <div className="mt-3 flex gap-1 overflow-x-auto">
           {TABS.map((f) => (
