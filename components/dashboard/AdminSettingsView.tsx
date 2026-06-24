@@ -247,7 +247,7 @@ function AgentsTab() {
   }, []);
 
   useSSE({
-    onAgentUpdated: useCallback((updated) => {
+    onAgentUpdated: useCallback((updated:any) => {
       setAgents((prev) =>
         prev.map((a) => a.id === updated.id ? { ...a, ...updated } : a)
       );
