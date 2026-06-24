@@ -6,10 +6,47 @@ function getToken(): string | null {
   return localStorage.getItem('auth_token');
 }
 
-async function apiFetch(path: string, init: RequestInit = {}): Promise<any> {
+// Singleton refresh promise to prevent concurrent refresh races
+let _refreshPromise: Promise<string | null> | null = null;
+
+async function tryRefresh(): Promise<string | null> {
+  if (_refreshPromise) return _refreshPromise;
+  _refreshPromise = (async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/auth/refresh`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+      if (!res.ok) return null;
+      const data = await res.json().catch(() => null);
+      const newToken = data?.data?.authToken;
+      if (newToken) {
+        localStorage.setItem('auth_token', newToken);
+        return newToken;
+      }
+      return null;
+    } catch {
+      return null;
+    } finally {
+      _refreshPromise = null;
+    }
+  })();
+  return _refreshPromise;
+}
+
+function clearAuth() {
+  if (typeof window === 'undefined') return;
+  localStorage.removeItem('auth_token');
+  localStorage.removeItem('auth_user');
+  document.cookie = 'auth-session=; path=/; max-age=0';
+  window.location.href = '/auth';
+}
+
+async function apiFetch(path: string, init: RequestInit = {}, _isRetry = false): Promise<any> {
   const token = getToken();
   const res = await fetch(`${API_BASE}/api/v1${path}`, {
     ...init,
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -17,13 +54,15 @@ async function apiFetch(path: string, init: RequestInit = {}): Promise<any> {
     },
   });
 
+  if (res.status === 401 && !_isRetry && path !== '/auth/refresh' && path !== '/auth/login') {
+    const newToken = await tryRefresh();
+    if (newToken) return apiFetch(path, init, true);
+    clearAuth();
+    throw new Error('Session expired. Please log in again.');
+  }
+
   if (res.status === 401) {
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('auth_token');
-      localStorage.removeItem('auth_user');
-      document.cookie = 'auth-session=; path=/; max-age=0';
-      window.location.href = '/auth';
-    }
+    clearAuth();
     throw new Error('Session expired. Please log in again.');
   }
 
@@ -39,21 +78,24 @@ async function apiFetch(path: string, init: RequestInit = {}): Promise<any> {
 export const api = {
   auth: {
     login: (email: string, password: string) =>
-      apiFetch('/auth/login', {
-        method: 'POST',
-        body: JSON.stringify({ email, password }),
-      }),
+      apiFetch('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
 
-    signup: (
-      firstName: string,
-      lastName: string,
-      email: string,
-      password: string
-    ) =>
-      apiFetch('/auth/signup', {
-        method: 'POST',
-        body: JSON.stringify({ firstName, lastName, email, password }),
-      }),
+    signup: (firstName: string, lastName: string, email: string, password: string) =>
+      apiFetch('/auth/signup', { method: 'POST', body: JSON.stringify({ firstName, lastName, email, password }) }),
+
+    acceptInvite: (code: string, firstName: string, lastName: string, password: string) =>
+      apiFetch('/auth/accept-invite', { method: 'POST', body: JSON.stringify({ code, firstName, lastName, password }) }),
+
+    forgotPassword: (email: string) =>
+      apiFetch('/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) }),
+
+    resetPassword: (code: string, password: string) =>
+      apiFetch('/auth/reset-password', { method: 'POST', body: JSON.stringify({ code, password }) }),
+
+    logout: () => {
+      // Fire-and-forget — revokes the httpOnly refresh cookie on the server
+      fetch(`${API_BASE}/api/v1/auth/logout`, { method: 'POST', credentials: 'include' }).catch(() => {});
+    },
   },
 
   conversations: {
@@ -65,33 +107,15 @@ export const api = {
       const qs = q.toString();
       return apiFetch(`/conversations${qs ? `?${qs}` : ''}`);
     },
-
     get: (id: string) => apiFetch(`/conversations/${id}`),
-
     reply: (id: string, body: string, type: 'comment' | 'note' = 'comment', attachments?: { filename: string; mimeType: string; base64: string }[]) =>
-      apiFetch(`/conversations/${id}/reply`, {
-        method: 'POST',
-        body: JSON.stringify({ body, type, attachments }),
-      }),
-
+      apiFetch(`/conversations/${id}/reply`, { method: 'POST', body: JSON.stringify({ body, type, attachments }) }),
     updateStatus: (id: string, status: string) =>
-      apiFetch(`/conversations/${id}/status`, {
-        method: 'PATCH',
-        body: JSON.stringify({ status }),
-      }),
-
+      apiFetch(`/conversations/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
     snooze: (id: string, snoozedUntil: number) =>
-      apiFetch(`/conversations/${id}/snooze`, {
-        method: 'POST',
-        body: JSON.stringify({ snoozedUntil }),
-      }),
-
+      apiFetch(`/conversations/${id}/snooze`, { method: 'POST', body: JSON.stringify({ snoozedUntil }) }),
     create: (contactId: string, body: string, subject?: string, messageType: 'inapp' | 'email' = 'inapp') =>
-      apiFetch('/conversations', {
-        method: 'POST',
-        body: JSON.stringify({ contactId, body, subject, messageType }),
-      }),
-
+      apiFetch('/conversations', { method: 'POST', body: JSON.stringify({ contactId, body, subject, messageType }) }),
     search: (q: string) => apiFetch(`/conversations/search?q=${encodeURIComponent(q)}`),
   },
 
@@ -101,14 +125,10 @@ export const api = {
 
   tags: {
     list: () => apiFetch('/tags'),
-    create: (name: string) =>
-      apiFetch('/tags', { method: 'POST', body: JSON.stringify({ name }) }),
+    create: (name: string) => apiFetch('/tags', { method: 'POST', body: JSON.stringify({ name }) }),
     delete: (id: string) => apiFetch(`/tags/${id}`, { method: 'DELETE' }),
     add: (conversationId: string, tagId: string) =>
-      apiFetch(`/conversations/${conversationId}/tags`, {
-        method: 'POST',
-        body: JSON.stringify({ tagId }),
-      }),
+      apiFetch(`/conversations/${conversationId}/tags`, { method: 'POST', body: JSON.stringify({ tagId }) }),
     remove: (conversationId: string, tagId: string) =>
       apiFetch(`/conversations/${conversationId}/tags/${tagId}`, { method: 'DELETE' }),
   },
@@ -139,22 +159,15 @@ export const api = {
 
   clickup: {
     getMembers: () => apiFetch('/clickup/members'),
-
-    createTask: (payload: {
-      name: string;
-      description: string;
-      priority: string;
-      assigneeId: number | null;
-    }) =>
-      apiFetch('/clickup/tasks', {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      }),
+    createTask: (payload: { name: string; description: string; priority: string; assigneeId: number | null }) =>
+      apiFetch('/clickup/tasks', { method: 'POST', body: JSON.stringify(payload) }),
   },
 
   agents: {
     list: () => apiFetch('/agents'),
     permissionsMatrix: () => apiFetch('/agents/permissions-matrix'),
+    invite: (email: string, role: string) =>
+      apiFetch('/agents/invite', { method: 'POST', body: JSON.stringify({ email, role }) }),
     updateRole: (id: string, role: string) =>
       apiFetch(`/agents/${id}/role`, { method: 'PATCH', body: JSON.stringify({ role }) }),
     updateStatus: (id: string, status: string) =>
@@ -164,11 +177,7 @@ export const api = {
   },
 
   analytics: {
-    performance: (params?: {
-      agentId?: string;
-      from?: string;
-      to?: string;
-    }) => {
+    performance: (params?: { agentId?: string; from?: string; to?: string }) => {
       const q = new URLSearchParams();
       if (params?.agentId) q.set('agentId', params.agentId);
       if (params?.from)    q.set('from',    params.from);
@@ -176,19 +185,10 @@ export const api = {
       const qs = q.toString();
       return apiFetch(`/analytics/performance${qs ? `?${qs}` : ''}`);
     },
-
   },
 
   auditLogs: {
-    list: (params?: {
-      agentId?: string;
-      action?: string;
-      targetId?: string;
-      from?: string;
-      to?: string;
-      page?: number;
-      perPage?: number;
-    }) => {
+    list: (params?: { agentId?: string; action?: string; targetId?: string; from?: string; to?: string; page?: number; perPage?: number }) => {
       const q = new URLSearchParams();
       if (params?.agentId)  q.set('agentId',  params.agentId);
       if (params?.action)   q.set('action',   params.action);

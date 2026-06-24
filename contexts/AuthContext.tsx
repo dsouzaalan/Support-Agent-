@@ -120,7 +120,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = useCallback(() => {
+    api.auth.logout(); // fire-and-forget: revoke refresh token on server
     localStorage.removeItem("auth_token");
+    localStorage.removeItem("auth_user");
     document.cookie = "auth-session=; path=/; max-age=0";
     setToken(null);
     setUser(null);

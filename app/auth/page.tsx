@@ -22,7 +22,7 @@ import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 
-type Tab = "signin" | "signup";
+type Tab = "signin" | "signup" | "forgot";
 
 const FEATURES = [
   "Unified inbox across all channels",
@@ -51,6 +51,9 @@ export default function AuthPage() {
     }
   }, []);
 
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotSent, setForgotSent] = useState(false);
+
   const [signInForm, setSignInForm] = useState({ email: "", password: "" });
   const [signUpForm, setSignUpForm] = useState({
     firstName: "",
@@ -64,6 +67,22 @@ export default function AuthPage() {
     setTab(next);
     setError("");
     setErrorType("generic");
+    setForgotSent(false);
+  }
+
+  async function handleForgotPassword(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    if (!forgotEmail) { setError("Please enter your email address."); return; }
+    setLoading(true);
+    try {
+      await api.auth.forgotPassword(forgotEmail);
+      setForgotSent(true);
+    } catch (err: any) {
+      setError(err.message || "Failed to send reset email.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function handleSignIn(e: React.FormEvent) {
@@ -173,18 +192,20 @@ export default function AuthPage() {
             <span className="text-base font-semibold">ZapMail</span>
           </div>
 
-          <div className="space-y-1">
-            <h2 className="text-2xl font-bold tracking-tight">
-              {tab === "signin" ? "Welcome back" : "Create your account"}
-            </h2>
-            <p className="text-sm text-muted-foreground">
-              {tab === "signin"
-                ? "Sign in to your agent workspace."
-                : "Get started with ZapMail for free."}
-            </p>
-          </div>
+          {tab !== "forgot" && (
+            <div className="space-y-1">
+              <h2 className="text-2xl font-bold tracking-tight">
+                {tab === "signin" ? "Welcome back" : "Create your account"}
+              </h2>
+              <p className="text-sm text-muted-foreground">
+                {tab === "signin"
+                  ? "Sign in to your agent workspace."
+                  : "Get started with ZapMail for free."}
+              </p>
+            </div>
+          )}
 
-          {sessionBanner === "deactivated" && (
+          {sessionBanner === "deactivated" && tab !== "forgot" && (
             <div className="flex gap-3 rounded-xl border border-destructive/40 bg-destructive/8 px-4 py-3.5">
               <ShieldOff className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
               <div>
@@ -196,7 +217,67 @@ export default function AuthPage() {
             </div>
           )}
 
-          <div className="flex rounded-lg border border-border bg-muted p-1 gap-1">
+          {/* Forgot password view — replaces tab bar + forms */}
+          {tab === "forgot" && (
+            <div className="space-y-5">
+              <div>
+                <button
+                  type="button"
+                  onClick={() => handleTabChange("signin")}
+                  className="mb-3 text-xs text-muted-foreground hover:text-foreground"
+                >
+                  ← Back to sign in
+                </button>
+                <h2 className="text-2xl font-bold tracking-tight">Reset your password</h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Enter your email and we&apos;ll send you a reset link.
+                </p>
+              </div>
+
+              {forgotSent ? (
+                <div className="flex items-start gap-3 rounded-xl border border-success/40 bg-success/8 px-4 py-4">
+                  <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-success" />
+                  <div>
+                    <p className="text-sm font-semibold text-success">Check your inbox</p>
+                    <p className="mt-0.5 text-xs text-success/80">
+                      We sent a reset link to <span className="font-medium">{forgotEmail}</span>. It expires in 48 hours.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <form onSubmit={handleForgotPassword} className="space-y-4">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="fp-email">Email</Label>
+                    <div className="relative">
+                      <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+                      <Input
+                        id="fp-email"
+                        type="email"
+                        placeholder="you@company.com"
+                        className="pl-9"
+                        value={forgotEmail}
+                        onChange={(e) => setForgotEmail(e.target.value)}
+                        autoComplete="email"
+                      />
+                    </div>
+                  </div>
+
+                  {error && (
+                    <div className="flex items-center gap-2.5 rounded-lg border border-destructive/30 bg-destructive/5 px-3.5 py-2.5">
+                      <AlertCircle className="h-4 w-4 shrink-0 text-destructive" />
+                      <p className="text-sm text-destructive">{error}</p>
+                    </div>
+                  )}
+
+                  <Button type="submit" className="w-full gap-2" disabled={loading}>
+                    {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <>Send reset link <ArrowRight className="h-4 w-4" /></>}
+                  </Button>
+                </form>
+              )}
+            </div>
+          )}
+
+          {tab !== "forgot" && <div className="flex rounded-lg border border-border bg-muted p-1 gap-1">
             <button
               onClick={() => handleTabChange("signin")}
               className={cn(
@@ -219,7 +300,7 @@ export default function AuthPage() {
             >
               Create Account
             </button>
-          </div>
+          </div>}
 
           {/* Sign In */}
           {tab === "signin" && (
@@ -241,7 +322,16 @@ export default function AuthPage() {
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="si-password">Password</Label>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="si-password">Password</Label>
+                  <button
+                    type="button"
+                    onClick={() => handleTabChange("forgot")}
+                    className="text-xs text-muted-foreground hover:text-primary"
+                  >
+                    Forgot password?
+                  </button>
+                </div>
                 <div className="relative">
                   <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
                   <Input
