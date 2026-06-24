@@ -163,6 +163,22 @@ export const api = {
       apiFetch(`/agents/${id}/permissions`, { method: 'PATCH', body: JSON.stringify({ key, granted }) }),
   },
 
+  analytics: {
+    performance: (params?: {
+      agentId?: string;
+      from?: string;
+      to?: string;
+    }) => {
+      const q = new URLSearchParams();
+      if (params?.agentId) q.set('agentId', params.agentId);
+      if (params?.from)    q.set('from',    params.from);
+      if (params?.to)      q.set('to',      params.to);
+      const qs = q.toString();
+      return apiFetch(`/analytics/performance${qs ? `?${qs}` : ''}`);
+    },
+
+  },
+
   auditLogs: {
     list: (params?: {
       agentId?: string;
