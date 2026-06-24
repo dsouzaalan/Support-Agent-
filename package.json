@@ -4,7 +4,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "dotenv -c -- next start",
     "lint": "next lint"
   },
   "dependencies": {
@@ -61,6 +61,8 @@
     "@types/node": "^22.16.5",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
+    "dotenv": "^16.4.5",
+    "dotenv-cli": "^7.3.0",
     "eslint": "^9.32.0",
     "eslint-config-next": "^15.3.4",
     "typescript": "^5.8.3"
