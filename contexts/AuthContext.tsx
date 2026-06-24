@@ -30,6 +30,7 @@ interface AuthContextValue {
   token: string | null;
   isLoading: boolean;
   login: (email: string, password: string) => Promise<void>;
+  setSession: (token: string) => void;
   logout: () => void;
 }
 
@@ -95,6 +96,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }, []),
   });
 
+  const setSession = useCallback((authToken: string) => {
+    const u = decodeJwtUser(authToken);
+    if (!u) throw new Error("Invalid token");
+    localStorage.setItem("auth_token", authToken);
+    document.cookie = "auth-session=true; path=/; SameSite=Strict";
+    setToken(authToken);
+    setUser(u);
+  }, []);
+
   const login = useCallback(async (email: string, password: string) => {
     const res = await api.auth.login(email, password);
     const authToken: string = res?.data?.authToken;
@@ -117,7 +127,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, token, isLoading, login, logout }}>
+    <AuthContext.Provider value={{ user, token, isLoading, login, setSession, logout }}>
       {children}
     </AuthContext.Provider>
   );

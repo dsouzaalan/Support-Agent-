@@ -34,7 +34,7 @@ const FEATURES = [
 export default function AuthPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { login } = useAuth();
+  const { login, setSession } = useAuth();
   const [tab, setTab] = useState<Tab>("signin");
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -120,8 +120,7 @@ export default function AuthPage() {
       );
       const authToken: string = res?.data?.authToken;
       if (!authToken) throw new Error("No auth token received from server.");
-      localStorage.setItem("auth_token", authToken);
-      document.cookie = "auth-session=true; path=/; SameSite=Strict";
+      setSession(authToken);
       router.push("/");
     } catch (err: any) {
       setError(err.message || "Sign up failed. Please try again.");
