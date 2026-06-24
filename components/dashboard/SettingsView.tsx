@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { slackAlerts, slackSettings as initial } from "@/lib/mock-data";
-import { Bell, Hash, Shield, ExternalLink, Loader2, ChevronLeft, ChevronRight, Filter, X } from "lucide-react";
+import { Bell, Hash, Shield, ExternalLink, Loader2, ChevronLeft, ChevronRight, Filter, X, MessageSquare, StickyNote, Wand2 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -131,16 +131,53 @@ function actionLabel(action: string): string {
   return action.replace(/_/g, " ").toLowerCase().replace(/^\w/, c => c.toUpperCase());
 }
 
-function metaSummary(log: AuditLogRow): string {
+function MetaDetails({ log }: { log: AuditLogRow }) {
   const m = log.metadata;
-  if (!m) return "";
-  if (log.action === "AGENT_ROLE_CHANGED") return `${m.from} → ${m.to}`;
-  if (log.action === "AGENT_STATUS_CHANGED") return `${m.from} → ${m.to}`;
-  if (log.action === "AGENT_PERMISSION_CHANGED") return `${m.key}: ${m.granted ? "granted" : "revoked"}`;
-  if (log.action === "STATUS_CHANGED") return m.status ?? "";
-  if (log.action === "CLICKUP_TASK_CREATED") return m.taskUrl ? "Task created" : "";
-  if (log.action === "MACRO_APPLIED") return m.macroId ? `macro ${m.macroId.slice(0, 8)}` : "";
-  return "";
+  const isConvAction = log.targetType === "CONVERSATION" && !!log.targetId;
+
+  // Plain-text summary line
+  let summary = "";
+  let icon: React.ReactNode = null;
+
+  if (log.action === "AGENT_ROLE_CHANGED")        { summary = `${m?.from} → ${m?.to}`; }
+  else if (log.action === "AGENT_STATUS_CHANGED") { summary = `${m?.from} → ${m?.to}`; }
+  else if (log.action === "AGENT_PERMISSION_CHANGED") { summary = `${m?.key}: ${m?.granted ? "granted" : "revoked"}`; }
+  else if (log.action === "STATUS_CHANGED")       { summary = m?.status ?? ""; }
+  else if (log.action === "CLICKUP_TASK_CREATED") { summary = m?.taskUrl ? "Task created" : ""; }
+  else if (log.action === "MACRO_APPLIED") {
+    icon = <Wand2 className="h-3 w-3 shrink-0 text-muted-foreground" />;
+    summary = m?.macroName ? `Macro: ${m.macroName}` : "Macro applied";
+  } else if (log.action === "CONVERSATION_REPLY") {
+    icon = <MessageSquare className="h-3 w-3 shrink-0 text-muted-foreground" />;
+    summary = m?.snippet ? `"${m.snippet}${m.snippet.length >= 120 ? "…" : ""}"` : "";
+  } else if (log.action === "NOTE_ADDED") {
+    icon = <StickyNote className="h-3 w-3 shrink-0 text-muted-foreground" />;
+    summary = m?.snippet ? `"${m.snippet}${m.snippet.length >= 120 ? "…" : ""}"` : "";
+  }
+
+  if (!summary && !isConvAction) return <span className="text-muted-foreground">—</span>;
+
+  return (
+    <div className="space-y-1">
+      {summary && (
+        <div className="flex items-start gap-1">
+          {icon}
+          <p className="line-clamp-2 text-xs leading-snug text-muted-foreground">{summary}</p>
+        </div>
+      )}
+      {isConvAction && (
+        <a
+          href={`/inbox/${log.targetId}${
+            m?.partId ? `?msg=${m.partId}` :
+            m?.partIds?.[0] ? `?msg=${m.partIds[0]}` : ''
+          }`}
+          className="inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
+        >
+          View conversation <ExternalLink className="h-2.5 w-2.5" />
+        </a>
+      )}
+    </div>
+  );
 }
 
 function relativeTime(iso: string): string {
@@ -336,20 +373,28 @@ export function AuditView() {
                       {actionLabel(log.action)}
                     </span>
                   </td>
-                  <td className="px-4 py-2.5">
+                  <td className="px-4 py-2.5 max-w-[200px]">
                     {log.targetName || log.targetId ? (
                       <>
-                        <div className="font-medium">{log.targetName ?? log.targetId}</div>
+                        <div className="font-medium truncate" title={log.targetName ?? log.targetId ?? ""}>
+                          {log.targetName ?? log.targetId}
+                        </div>
                         {log.targetType && (
                           <div className="text-[10px] text-muted-foreground uppercase">{log.targetType}</div>
+                        )}
+                        {/* Show conversation ID as secondary reference when subject is shown */}
+                        {log.targetName && log.targetId && log.targetType === "CONVERSATION" && (
+                          <div className="font-mono text-[10px] text-muted-foreground/60">
+                            #{log.targetId.slice(-8)}
+                          </div>
                         )}
                       </>
                     ) : (
                       <span className="text-muted-foreground">—</span>
                     )}
                   </td>
-                  <td className="px-4 py-2.5 text-muted-foreground">
-                    {metaSummary(log) || "—"}
+                  <td className="px-4 py-2.5 max-w-[280px]">
+                    <MetaDetails log={log} />
                   </td>
                 </tr>
               ))}

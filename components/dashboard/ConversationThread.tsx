@@ -36,6 +36,7 @@ interface ThreadProps {
   onStatusChange?: (status: ConvStatus) => void;
   onTagsChange?: (tags: { id: string; name: string }[]) => void;
   onSnooze?: (snoozedUntil: number) => void;
+  highlightMessageId?: string;
 }
 
 function nameInitials(name: string): string {
@@ -49,7 +50,7 @@ const SNOOZE_OPTIONS = [
   { label: "Next week",   getTime: () => Math.floor(Date.now() / 1000) + 7 * 24 * 3600 },
 ];
 
-export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl, onLinkClickup, onStatusChange, onTagsChange, onSnooze }: ThreadProps) {
+export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl, onLinkClickup, onStatusChange, onTagsChange, onSnooze, highlightMessageId }: ThreadProps) {
   const { user } = useAuth();
   const { can } = usePermissions();
   const currentUserName = user ? `${user.firstName} ${user.lastName ?? ""}`.trim() : "Agent";
@@ -116,8 +117,27 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
     setConvTags(conversation.tags ?? []);
     setAttachedFiles([]);
 
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+    // Don't auto-scroll to bottom when we're deep-linking to a specific message.
+    if (!highlightMessageId) {
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+    }
   }, [conversation.id, conversation.messages]);
+
+  // Scroll to and briefly highlight the linked message when arriving from an audit log link.
+  // setTimeout defers until after all effects and DOM paints in this cycle have settled.
+  useEffect(() => {
+    if (!highlightMessageId) return;
+    const t = setTimeout(() => {
+      const el = document.getElementById(`msg-${highlightMessageId}`);
+      if (!el) return;
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      el.classList.add("ring-2", "ring-primary", "ring-offset-2", "rounded-xl");
+      setTimeout(() => {
+        el.classList.remove("ring-2", "ring-primary", "ring-offset-2", "rounded-xl");
+      }, 2500);
+    }, 100);
+    return () => clearTimeout(t);
+  }, [highlightMessageId, localMessages]);
 
   // Load tags, macros, articles once on mount
   useEffect(() => {
@@ -608,7 +628,7 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
         <div className="mx-auto flex max-w-2xl flex-col gap-4">
           {localMessages.map((m) => {
             if (m.from === "note") return can('notes:view') ? (
-              <div key={m.id} className="mx-auto w-full max-w-[88%] rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-xs">
+              <div key={m.id} id={`msg-${m.id}`} className="mx-auto w-full max-w-[88%] rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-xs">
                 <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-warning">
                   <StickyNote className="h-3 w-3" /> Internal note · {m.author} · {m.time}
                 </div>
@@ -630,7 +650,7 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
             const langDifferent = m.from === "customer" && m.language && m.language !== AGENT_LANG;
             const isAgent = m.from === "agent";
             return (
-              <div key={m.id} className={cn("flex gap-2.5", isAgent && "flex-row-reverse")}>
+              <div key={m.id} id={`msg-${m.id}`} className={cn("flex gap-2.5", isAgent && "flex-row-reverse")}>
                 <div
                   title={isAgent ? (m.author === currentUserName ? `You · ${m.author}` : (m.author || "Agent")) : conversation.customer.name}
                   className={cn("flex h-7 w-7 shrink-0 cursor-default items-center justify-center rounded-full text-[10px] font-semibold",
