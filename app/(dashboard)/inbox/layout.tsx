@@ -13,7 +13,7 @@ function InboxContent({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { user } = useAuth();
-  const { conversations, loading, error, refetch, clickupLinks, composingContact } = useConversationsContext();
+  const { conversations, loading, loadingMore, hasMore, error, refetch, fetchNextPage, clickupLinks, composingContact } = useConversationsContext();
 
   const segments = pathname.split("/").filter(Boolean);
   const selectedId = segments[0] === "inbox" && segments.length > 1 ? segments[1] : "";
@@ -75,6 +75,9 @@ function InboxContent({ children }: { children: React.ReactNode }) {
           agentName={agentName}
           agentInitials={agentInitials}
           clickupLinks={clickupTicketMap}
+          onLoadMore={fetchNextPage}
+          loadingMore={loadingMore}
+          hasMore={hasMore}
         />
       </div>
 

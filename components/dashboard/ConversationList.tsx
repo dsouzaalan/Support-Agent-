@@ -32,9 +32,12 @@ interface Props {
   agentName: string;
   agentInitials: string;
   clickupLinks?: Record<string, string>;
+  onLoadMore?: () => void;
+  loadingMore?: boolean;
+  hasMore?: boolean;
 }
 
-export function ConversationList({ conversations, selectedId, onSelect, agentName, agentInitials, clickupLinks }: Props) {
+export function ConversationList({ conversations, selectedId, onSelect, agentName, agentInitials, clickupLinks, onLoadMore, loadingMore, hasMore }: Props) {
   const router = useRouter();
   const [tab, setTab] = useState<Tab>("All");
   const [q, setQ] = useState("");
@@ -47,6 +50,7 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
   const [unhealthyOnly, setUnhealthyOnly] = useState(false);
   const [savedView, setSavedView] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const listScrollRef = useRef<HTMLDivElement>(null);
 
   // Stable refs so the keyboard handler never goes stale
   const filteredRef = useRef<Conversation[]>([]);
@@ -98,6 +102,20 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, []);
+
+  // Infinite scroll — fetch next page when agent scrolls near the bottom
+  useEffect(() => {
+    const el = listScrollRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      if (!onLoadMore || !hasMore || loadingMore) return;
+      if (el.scrollHeight - el.scrollTop - el.clientHeight < 200) {
+        onLoadMore();
+      }
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [onLoadMore, hasMore, loadingMore]);
 
   // Debounced API search for queries 3+ chars — searches beyond the loaded 50
   useEffect(() => {
@@ -255,7 +273,7 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
+      <div ref={listScrollRef} className="flex-1 overflow-y-auto">
         {filtered.map((c) => (
           <ConvRow
             key={c.id}
@@ -274,6 +292,14 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
           />
         ))}
         {filtered.length === 0 && <div className="px-4 py-12 text-center text-xs text-muted-foreground">No conversations match.</div>}
+        {loadingMore && (
+          <div className="flex items-center justify-center gap-2 py-4 text-xs text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading more…
+          </div>
+        )}
+        {!hasMore && conversations.length > 0 && !q.trim() && (
+          <div className="py-4 text-center text-xs text-muted-foreground">All conversations loaded</div>
+        )}
       </div>
 
       <div className="flex items-center gap-2 border-t border-border bg-card px-4 py-3">

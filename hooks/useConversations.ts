@@ -4,11 +4,16 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { api } from "@/lib/api";
 import type { Conversation, ConvStatus } from "@/lib/mock-data";
 
+const PER_PAGE = 150;
+
 interface UseConversationsReturn {
   conversations: Conversation[];
   loading: boolean;
+  loadingMore: boolean;
+  hasMore: boolean;
   error: string | null;
   refetch: () => Promise<void>;
+  fetchNextPage: () => Promise<void>;
   upsertConversation: (c: Conversation) => void;
   setLocalStatus: (id: string, status: ConvStatus) => void;
   patchConversation: (id: string, patch: Partial<Conversation>) => void;
@@ -17,7 +22,10 @@ interface UseConversationsReturn {
 export function useConversations(): UseConversationsReturn {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const pageRef = useRef(1);
   const mounted = useRef(true);
 
   useEffect(() => {
@@ -29,18 +37,40 @@ export function useConversations(): UseConversationsReturn {
     try {
       setLoading(true);
       setError(null);
-      const res = await api.conversations.list({ perPage: 50 });
-      if (mounted.current) {
-        setConversations(res?.data?.conversations ?? []);
-      }
+      pageRef.current = 1;
+      const res = await api.conversations.list({ perPage: PER_PAGE, page: 1, status: 'all' });
+      if (!mounted.current) return;
+      const fetched: Conversation[] = res?.data?.conversations ?? [];
+      setConversations(fetched);
+      setHasMore(fetched.length === PER_PAGE);
     } catch (err: any) {
-      if (mounted.current) {
-        setError(err.message || "Failed to load conversations");
-      }
+      if (mounted.current) setError(err.message || "Failed to load conversations");
     } finally {
       if (mounted.current) setLoading(false);
     }
   }, []);
+
+  const fetchNextPage = useCallback(async () => {
+    if (loadingMore || !hasMore) return;
+    try {
+      setLoadingMore(true);
+      const nextPage = pageRef.current + 1;
+      const res = await api.conversations.list({ perPage: PER_PAGE, page: nextPage, status: 'all' });
+      if (!mounted.current) return;
+      const fetched: Conversation[] = res?.data?.conversations ?? [];
+      setConversations((prev) => {
+        const existingIds = new Set(prev.map((c) => c.id));
+        const fresh = fetched.filter((c) => !existingIds.has(c.id));
+        return [...prev, ...fresh];
+      });
+      pageRef.current = nextPage;
+      setHasMore(fetched.length === PER_PAGE);
+    } catch (err: any) {
+      // silently fail — existing conversations stay visible
+    } finally {
+      if (mounted.current) setLoadingMore(false);
+    }
+  }, [loadingMore, hasMore]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
@@ -66,5 +96,5 @@ export function useConversations(): UseConversationsReturn {
     );
   }, []);
 
-  return { conversations, loading, error, refetch: fetchAll, upsertConversation, setLocalStatus, patchConversation };
+  return { conversations, loading, loadingMore, hasMore, error, refetch: fetchAll, fetchNextPage, upsertConversation, setLocalStatus, patchConversation };
 }
