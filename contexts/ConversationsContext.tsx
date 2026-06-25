@@ -18,8 +18,11 @@ export interface ComposingContact {
 interface ConversationsContextValue {
   conversations: Conversation[];
   loading: boolean;
+  loadingMore: boolean;
+  hasMore: boolean;
   error: string | null;
   refetch: () => Promise<void>;
+  fetchNextPage: () => Promise<void>;
   upsertConversation: (c: Conversation) => void;
   setLocalStatus: (id: string, status: ConvStatus) => void;
   patchConversation: (id: string, patch: Partial<Conversation>) => void;
@@ -33,7 +36,7 @@ interface ConversationsContextValue {
 const ConversationsContext = createContext<ConversationsContextValue | null>(null);
 
 export function ConversationsProvider({ children }: { children: React.ReactNode }) {
-  const { conversations, loading, error, refetch, upsertConversation, setLocalStatus, patchConversation } = useConversations();
+  const { conversations, loading, loadingMore, hasMore, error, refetch, fetchNextPage, upsertConversation, setLocalStatus, patchConversation } = useConversations();
   const [clickupLinks, setClickupLinks] = useState<Record<string, ClickUpLink>>({});
   const [latestUpdate, setLatestUpdate] = useState<Conversation | null>(null);
   const [composingContact, setComposingContact] = useState<ComposingContact | null>(null);
@@ -64,7 +67,7 @@ export function ConversationsProvider({ children }: { children: React.ReactNode 
 
   return (
     <ConversationsContext.Provider
-      value={{ conversations, loading, error, refetch, upsertConversation, setLocalStatus, patchConversation, clickupLinks, linkClickup, latestUpdate, composingContact, setComposingContact }}
+      value={{ conversations, loading, loadingMore, hasMore, error, refetch, fetchNextPage, upsertConversation, setLocalStatus, patchConversation, clickupLinks, linkClickup, latestUpdate, composingContact, setComposingContact }}
     >
       {children}
     </ConversationsContext.Provider>

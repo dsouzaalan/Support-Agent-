@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
-import type { Conversation, ConvStatus, Message } from "@/lib/mock-data";
+import type { Conversation, ConvStatus, Message, MessageAttachment } from "@/lib/mock-data";
 import { suggestedMcp, getMcpResponse } from "@/lib/mock-data";
 import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
@@ -36,10 +36,31 @@ interface ThreadProps {
   onStatusChange?: (status: ConvStatus) => void;
   onTagsChange?: (tags: { id: string; name: string }[]) => void;
   onSnooze?: (snoozedUntil: number) => void;
+  highlightMessageId?: string;
+  searchQuery?: string;
 }
 
 function nameInitials(name: string): string {
   return name.split(/\s+/).filter(Boolean).map((w) => w[0]).join("").toUpperCase().slice(0, 2);
+}
+
+const TAG_PALETTE = [
+  { bg: "bg-violet-100 dark:bg-violet-900/40", text: "text-violet-700 dark:text-violet-300", dot: "bg-violet-500" },
+  { bg: "bg-blue-100 dark:bg-blue-900/40",     text: "text-blue-700 dark:text-blue-300",     dot: "bg-blue-500" },
+  { bg: "bg-emerald-100 dark:bg-emerald-900/40", text: "text-emerald-700 dark:text-emerald-300", dot: "bg-emerald-500" },
+  { bg: "bg-amber-100 dark:bg-amber-900/40",   text: "text-amber-700 dark:text-amber-300",   dot: "bg-amber-500" },
+  { bg: "bg-pink-100 dark:bg-pink-900/40",     text: "text-pink-700 dark:text-pink-300",     dot: "bg-pink-500" },
+  { bg: "bg-orange-100 dark:bg-orange-900/40", text: "text-orange-700 dark:text-orange-300", dot: "bg-orange-500" },
+  { bg: "bg-teal-100 dark:bg-teal-900/40",     text: "text-teal-700 dark:text-teal-300",     dot: "bg-teal-500" },
+  { bg: "bg-red-100 dark:bg-red-900/40",       text: "text-red-700 dark:text-red-300",       dot: "bg-red-500" },
+  { bg: "bg-indigo-100 dark:bg-indigo-900/40", text: "text-indigo-700 dark:text-indigo-300", dot: "bg-indigo-500" },
+  { bg: "bg-cyan-100 dark:bg-cyan-900/40",     text: "text-cyan-700 dark:text-cyan-300",     dot: "bg-cyan-500" },
+];
+
+function getTagColor(id: string) {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = ((h << 5) - h + id.charCodeAt(i)) | 0;
+  return TAG_PALETTE[Math.abs(h) % TAG_PALETTE.length];
 }
 
 const SNOOZE_OPTIONS = [
@@ -49,7 +70,7 @@ const SNOOZE_OPTIONS = [
   { label: "Next week",   getTime: () => Math.floor(Date.now() / 1000) + 7 * 24 * 3600 },
 ];
 
-export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl, onLinkClickup, onStatusChange, onTagsChange, onSnooze }: ThreadProps) {
+export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl, onLinkClickup, onStatusChange, onTagsChange, onSnooze, highlightMessageId, searchQuery }: ThreadProps) {
   const { user } = useAuth();
   const { can } = usePermissions();
   const currentUserName = user ? `${user.firstName} ${user.lastName ?? ""}`.trim() : "Agent";
@@ -71,6 +92,13 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
   const shortcutsBtnRef = useRef<HTMLButtonElement>(null);
   const [showSnoozeMenu, setShowSnoozeMenu] = useState(false);
 
+  // Assignment
+  const [showAssignMenu, setShowAssignMenu] = useState(false);
+  const [agentList, setAgentList] = useState<{ id: string; name: string }[]>([]);
+  const [agentListLoading, setAgentListLoading] = useState(false);
+  const [assigning, setAssigning] = useState(false);
+  const [localAssignedAgent, setLocalAssignedAgent] = useState(conversation.assignedAgent ?? null);
+
   // Tags
   const [convTags, setConvTags] = useState<{ id: string; name: string }[]>(conversation.tags ?? []);
   const [allTags, setAllTags] = useState<{ id: string; name: string }[]>([]);
@@ -78,6 +106,7 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
   const [tagsLoading, setTagsLoading] = useState(false);
   const [newTagName, setNewTagName] = useState("");
   const [creatingTag, setCreatingTag] = useState(false);
+  const tagInputRef = useRef<HTMLInputElement>(null);
 
   // Macros (real API)
   const [macros, setMacros] = useState<{ id: string; name: string; description: string; actions: any[] }[]>([]);
@@ -110,14 +139,99 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
   const canRef = useRef(can);
   canRef.current = can;
 
-  useEffect(() => {
-    setDraft(""); setToneCheck(null); setTranslatePreview(null);
-    setShowTranslated({}); setMcpResult(null); setLocalMessages(conversation.messages);
-    setConvTags(conversation.tags ?? []);
-    setAttachedFiles([]);
+  // Resolve which message to highlight:
+  // - explicit partId from audit log link (?msg=...)
+  // - OR first message whose text contains the search query (?q=...)
+  const resolvedHighlightId = useMemo(() => {
+    if (highlightMessageId) return highlightMessageId;
+    if (!searchQuery?.trim()) return undefined;
+    const qLow = searchQuery.trim().toLowerCase();
+    return localMessages.find((m) => m.text?.toLowerCase().includes(qLow))?.id;
+  }, [highlightMessageId, searchQuery, localMessages]);
 
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [conversation.id, conversation.messages]);
+  // Track which target we've already scrolled to so SSE message updates don't re-trigger it.
+  const scrolledForRef = useRef<string | undefined>(undefined);
+  // Detect conversation switches vs same-conversation SSE updates.
+  const prevConvIdRef = useRef(conversation.id);
+
+  useEffect(() => {
+    const isSwitch = prevConvIdRef.current !== conversation.id;
+    prevConvIdRef.current = conversation.id;
+
+    if (isSwitch) {
+      // Switching to a new conversation — full reset.
+      setDraft(""); setToneCheck(null); setTranslatePreview(null);
+      setShowTranslated({}); setMcpResult(null);
+      setConvTags(conversation.tags ?? []);
+      setAttachedFiles([]);
+      setLocalAssignedAgent(conversation.assignedAgent ?? null);
+      scrolledForRef.current = undefined;
+      setLocalMessages(conversation.messages);
+      if (!highlightMessageId && !searchQuery?.trim()) {
+        scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+      }
+    } else {
+      // SSE update on the same conversation — merge server state into local state.
+      setLocalMessages((prev) => {
+        const prevById = new Map(prev.map((m) => [m.id, m]));
+        let changed = false;
+        let updated = prev.map((m) => {
+          const serverVersion = conversation.messages.find((s) => s.id === m.id);
+          if (!serverVersion || m.id.startsWith("opt-")) return m;
+          // Merge server data into existing message (keeps read state, text, attachments fresh)
+          const merged = { ...serverVersion, attachments: serverVersion.attachments?.map((a, i) => ({ ...a, name: m.attachments?.[i]?.name ?? a.name })) };
+          if (JSON.stringify(merged) !== JSON.stringify(m)) { changed = true; return merged; }
+          return m;
+        });
+
+        const toAppend: Message[] = [];
+        for (const serverMsg of conversation.messages) {
+          if (prevById.has(serverMsg.id)) continue;
+          // New agent message — replace earliest optimistic placeholder to avoid duplication.
+          if (serverMsg.from === "agent") {
+            const optIdx = updated.findIndex((m) => m.id.startsWith("opt-"));
+            if (optIdx !== -1) {
+              const opt = updated[optIdx];
+              updated[optIdx] = {
+                ...serverMsg,
+                attachments: serverMsg.attachments?.map((a, i) => ({ ...a, name: opt.attachments?.[i]?.name ?? a.name })),
+              };
+              changed = true;
+              continue;
+            }
+          }
+          toAppend.push(serverMsg);
+        }
+
+        if (!changed && toAppend.length === 0) return prev;
+        return toAppend.length > 0 ? [...updated, ...toAppend] : updated;
+      });
+      // Sync assignment from SSE
+      setLocalAssignedAgent(conversation.assignedAgent ?? null);
+    }
+  }, [conversation.id, conversation.messages, conversation.assignedAgent]);
+
+  // Scroll to and ring-highlight the target message once per navigation.
+  // Also depends on localMessages so it retries after the full conversation loads
+  // (the element may not exist yet when the effect first fires from the URL param).
+  useEffect(() => {
+    if (!resolvedHighlightId) return;
+    if (scrolledForRef.current === resolvedHighlightId) return;
+
+    const t = setTimeout(() => {
+      const el = document.getElementById(`msg-${resolvedHighlightId}`);
+      if (!el) return; // messages not rendered yet — will retry when localMessages updates
+      scrolledForRef.current = resolvedHighlightId;
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      el.classList.add("ring-2", "ring-primary", "ring-offset-2", "rounded-xl");
+      // Clean ?msg= / ?q= from the URL once we've landed — no need for it to persist.
+      window.history.replaceState({}, '', window.location.pathname);
+      setTimeout(() => {
+        el.classList.remove("ring-2", "ring-primary", "ring-offset-2", "rounded-xl");
+      }, 2500);
+    }, 200);
+    return () => clearTimeout(t);
+  }, [resolvedHighlightId, localMessages]);
 
   // Load tags, macros, articles once on mount
   useEffect(() => {
@@ -212,7 +326,16 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
     if ((!draft.trim() && !attachedFiles.length) || sending) return;
     const body = translatePreview ? translatePreview.text : draft.trim();
     setSending(true);
-    // Optimistic update
+    const filesToSend = [...attachedFiles];
+
+    // Build optimistic attachment previews synchronously using object URLs
+    const blobUrls: string[] = [];
+    const optimisticAttachments: MessageAttachment[] = filesToSend.map((file) => {
+      const url = URL.createObjectURL(file);
+      blobUrls.push(url);
+      return { name: file.name, url, contentType: file.type || "application/octet-stream" };
+    });
+
     const optimistic: Message = {
       id: `opt-${Date.now()}`,
       from: "agent",
@@ -220,11 +343,11 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
       time: new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }),
       read: true,
       author: user ? `${user.firstName} ${user.lastName ?? ""}`.trim() : "Agent",
+      ...(optimisticAttachments.length > 0 && { attachments: optimisticAttachments }),
     };
     setLocalMessages((prev) => [...prev, optimistic]);
-    setDraft(""); setToneCheck(null); setTranslatePreview(null);
-    const filesToSend = [...attachedFiles];
     setAttachedFiles([]);
+    setDraft(""); setToneCheck(null); setTranslatePreview(null);
     try {
       const attachments = filesToSend.length
         ? await Promise.all(filesToSend.map((file) => new Promise<{ filename: string; mimeType: string; base64: string }>((resolve, reject) => {
@@ -235,11 +358,15 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
           })))
         : undefined;
       await api.conversations.reply(conversation.id, body, "comment", attachments);
+      // Revoke blob URLs now that the server has the real Cloudinary URLs via SSE
+      blobUrls.forEach((u) => URL.revokeObjectURL(u));
       toast.success(translatePreview ? `Reply sent in ${LANG_LABELS[translatePreview.lang]}.` : `Reply sent to ${conversation.customer.name}.`);
     } catch (err: any) {
       toast.error(`Failed to send reply: ${err.message}`);
       setLocalMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
+      blobUrls.forEach((u) => URL.revokeObjectURL(u));
       setDraft(body);
+      setAttachedFiles(filesToSend);
     } finally {
       setSending(false);
     }
@@ -418,6 +545,16 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
                 <ClipboardList className="h-2.5 w-2.5" />{clickupTicket}
               </a>
             )}
+            {(() => {
+              const name = localAssignedAgent?.name || conversation.intercomAssignee?.name || null;
+              if (!name) return null;
+              return (
+                <span className="inline-flex items-center gap-1 rounded-full bg-violet-500/10 px-2 py-0.5 text-[10px] font-semibold text-violet-600 dark:text-violet-400">
+                  <UserPlus className="h-2.5 w-2.5" />
+                  {name}
+                </span>
+              );
+            })()}
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
             {(() => {
@@ -443,75 +580,187 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
           </div>
           {/* Tags row */}
           <div className="mt-1.5 flex flex-wrap items-center gap-1">
-            {convTags.map((tag) => (
-              <span key={tag.id} className="inline-flex items-center gap-0.5 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
-                #{tag.name}
-                {can('tags:apply') && (
-                  <button onClick={() => handleRemoveTag(tag.id)} className="ml-0.5 rounded-full hover:text-danger focus:outline-none" aria-label={`Remove ${tag.name}`}>
+            {convTags.map((tag) => {
+              const color = getTagColor(tag.id);
+              return (
+                <span key={tag.id} className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold", color.bg, color.text)}>
+                  <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", color.dot)} />
+                  {tag.name}
+                  <button onClick={() => handleRemoveTag(tag.id)} className="ml-0.5 opacity-60 hover:opacity-100 focus:outline-none" aria-label={`Remove ${tag.name}`}>
                     <X className="h-2.5 w-2.5" />
                   </button>
-                )}
-              </span>
-            ))}
-            {can('tags:apply') && (
+                </span>
+              );
+            })}
             <div className="relative">
               <button
                 onClick={() => setShowTagPicker((v) => !v)}
-                className="inline-flex items-center gap-0.5 rounded-full border border-dashed border-border px-2 py-0.5 text-[10px] text-muted-foreground hover:border-primary/50 hover:text-primary"
+                className="inline-flex items-center gap-1 rounded-full border border-dashed border-border px-2 py-0.5 text-[10px] font-medium text-muted-foreground hover:border-primary/50 hover:text-primary transition-colors"
                 title="Add tag"
               >
-                <Plus className="h-2.5 w-2.5" /> Tag
+                <Plus className="h-3 w-3" /> Tag
               </button>
               {showTagPicker && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => { setShowTagPicker(false); setNewTagName(""); }} />
-                  <div className="absolute left-0 top-full z-50 mt-1 w-48 rounded-lg border border-border bg-card shadow-lg">
-                    <div className="px-2 py-1.5 text-[10px] font-semibold uppercase text-muted-foreground">Add tag</div>
-                    <div className="max-h-40 overflow-y-auto pb-1">
-                      {allTags.filter((t) => !convTags.some((ct) => ct.id === t.id)).map((tag) => (
-                        <button
-                          key={tag.id}
-                          onClick={() => handleAddTag(tag)}
-                          className="block w-full px-3 py-1 text-left text-xs hover:bg-muted"
-                        >
-                          #{tag.name}
-                        </button>
-                      ))}
-                      {allTags.filter((t) => !convTags.some((ct) => ct.id === t.id)).length === 0 && (
-                        <div className="px-3 pb-1 text-[11px] text-muted-foreground">No existing tags</div>
+                  <div className="absolute left-0 top-full z-50 mt-1 w-56 rounded-xl border border-border bg-card shadow-xl">
+                    {/* Search input */}
+                    <div className="px-2 pt-2 pb-1">
+                      <input
+                        ref={tagInputRef}
+                        autoFocus
+                        value={newTagName}
+                        onChange={(e) => setNewTagName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            const exact = allTags.find((t) => t.name.toLowerCase() === newTagName.trim().toLowerCase());
+                            if (exact) handleAddTag(exact);
+                            else if (newTagName.trim()) handleCreateTag();
+                          }
+                          e.stopPropagation();
+                        }}
+                        placeholder="Search tags…"
+                        className="w-full rounded-lg border border-border bg-muted/50 px-2.5 py-1.5 text-xs focus:border-primary/50 focus:outline-none"
+                      />
+                    </div>
+                    {/* Tag list */}
+                    <div className="max-h-48 overflow-y-auto py-1">
+                      {allTags
+                        .filter((t) => t.name.toLowerCase().includes(newTagName.trim().toLowerCase()))
+                        .map((tag) => {
+                          const applied = convTags.some((ct) => ct.id === tag.id);
+                          const color = getTagColor(tag.id);
+                          return (
+                            <button
+                              key={tag.id}
+                              onClick={() => applied ? handleRemoveTag(tag.id) : handleAddTag(tag)}
+                              className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs hover:bg-muted transition-colors"
+                            >
+                              <span className={cn("flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border transition-colors", applied ? "border-primary bg-primary text-primary-foreground" : "border-border")}>
+                                {applied && <span className="text-[9px] font-bold leading-none">✓</span>}
+                              </span>
+                              <span className={cn("flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-semibold", color.bg, color.text)}>
+                                <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", color.dot)} />
+                                {tag.name}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      {allTags.filter((t) => t.name.toLowerCase().includes(newTagName.trim().toLowerCase())).length === 0 && !newTagName.trim() && (
+                        <div className="px-3 py-2 text-[11px] text-muted-foreground">No tags yet</div>
                       )}
                     </div>
-                    {can('tags:manage') && (
+                    {/* Create row — only shown when typed text doesn't match any existing tag */}
+                    {newTagName.trim() && !allTags.some((t) => t.name.toLowerCase() === newTagName.trim().toLowerCase()) && (
                       <div className="border-t border-border px-2 py-1.5">
-                        <div className="mb-1 text-[10px] font-semibold uppercase text-muted-foreground">Create new</div>
-                        <div className="flex gap-1">
-                          <input
-                            autoFocus
-                            value={newTagName}
-                            onChange={(e) => setNewTagName(e.target.value)}
-                            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleCreateTag(); } e.stopPropagation(); }}
-                            placeholder="Tag name…"
-                            className="min-w-0 flex-1 rounded border border-border bg-background px-2 py-1 text-xs focus:border-primary/50 focus:outline-none"
-                          />
-                          <button
-                            onClick={handleCreateTag}
-                            disabled={!newTagName.trim() || creatingTag}
-                            className="rounded bg-primary px-2 py-1 text-[10px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-                          >
-                            {creatingTag ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
-                          </button>
-                        </div>
+                        <button
+                          onClick={handleCreateTag}
+                          disabled={creatingTag}
+                          className="flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium text-primary hover:bg-primary/8 disabled:opacity-50 transition-colors"
+                        >
+                          {creatingTag ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+                          Create &ldquo;{newTagName.trim()}&rdquo;
+                        </button>
                       </div>
                     )}
                   </div>
                 </>
               )}
             </div>
-            )}
           </div>
         </div>
         <div className="flex items-center gap-1">
-          {can('conversations:assign') && <IconBtn label="Reassign"><UserPlus className="h-4 w-4" /></IconBtn>}
+          {can('conversations:assign') && (
+            <div className="relative">
+              {showAssignMenu && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowAssignMenu(false)} />
+                  <div className="absolute right-0 top-full z-50 mt-1 w-52 rounded-lg border border-border bg-card shadow-lg">
+                    <div className="px-3 py-1.5 text-[10px] font-semibold uppercase text-muted-foreground">Assign to</div>
+                    {agentListLoading ? (
+                      <div className="flex items-center gap-1.5 px-3 py-2 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" />Loading…</div>
+                    ) : (
+                      <>
+                        {localAssignedAgent && (
+                          <button
+                            disabled={assigning}
+                            onClick={async () => {
+                              setAssigning(true);
+                              try {
+                                await api.conversations.assign(conversation.id, null);
+                                setLocalAssignedAgent(null);
+                                toast.success('Unassigned');
+                              } catch { toast.error('Failed to unassign'); }
+                              finally { setAssigning(false); setShowAssignMenu(false); }
+                            }}
+                            className="block w-full px-3 py-1.5 text-left text-xs text-muted-foreground hover:bg-muted"
+                          >
+                            {assigning ? <Loader2 className="h-3 w-3 animate-spin inline mr-1" /> : null}
+                            Unassign
+                          </button>
+                        )}
+                        {agentList.map((a) => (
+                          <button
+                            key={a.id}
+                            disabled={assigning}
+                            onClick={async () => {
+                              setAssigning(true);
+                              try {
+                                await api.conversations.assign(conversation.id, a.id);
+                                setLocalAssignedAgent({ id: a.id, name: a.name, assignedById: user?.id ?? '', assignedByName: currentUserName, assignedAt: new Date().toISOString() });
+                                toast.success(`Assigned to ${a.name}`);
+                              } catch { toast.error('Failed to assign'); }
+                              finally { setAssigning(false); setShowAssignMenu(false); }
+                            }}
+                            className={cn(
+                              "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-muted",
+                              localAssignedAgent?.id === a.id && "font-medium text-primary"
+                            )}
+                          >
+                            <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[9px] font-bold text-primary">
+                              {a.name.charAt(0).toUpperCase()}
+                            </span>
+                            {a.name}
+                            {localAssignedAgent?.id === a.id && <span className="ml-auto text-[10px] text-primary">✓</span>}
+                          </button>
+                        ))}
+                      </>
+                    )}
+                  </div>
+                </>
+              )}
+              <div className="relative flex items-center gap-1">
+                <IconBtn
+                  label={localAssignedAgent ? `Assigned to ${localAssignedAgent.name}` : 'Assign'}
+                  onClick={async () => {
+                    if (!showAssignMenu && agentList.length === 0) {
+                      setAgentListLoading(true);
+                      try {
+                        const res = await api.agents.list();
+                        const agents: any[] = res.data ?? [];
+                        setAgentList(agents.filter((a) => a.status === 'active').map((a: any) => ({
+                          id: a.id,
+                          name: [a.firstName, a.lastName].filter(Boolean).join(' ').trim() || a.email,
+                        })));
+                      } catch { toast.error('Could not load agents'); }
+                      finally { setAgentListLoading(false); }
+                    }
+                    setShowAssignMenu((v) => !v);
+                  }}
+                >
+                  {assigning
+                    ? <Loader2 className="h-4 w-4 animate-spin" />
+                    : <UserPlus className={cn("h-4 w-4", localAssignedAgent && "text-primary")} />}
+                </IconBtn>
+                {localAssignedAgent && (
+                  <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-primary/10 text-[9px] font-bold text-primary" title={`Assigned to ${localAssignedAgent.name}`}>
+                    {localAssignedAgent.name.charAt(0).toUpperCase()}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
           {/* Snooze */}
           {can('conversations:status') && (
             <div className="relative">
@@ -608,7 +857,7 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
         <div className="mx-auto flex max-w-2xl flex-col gap-4">
           {localMessages.map((m) => {
             if (m.from === "note") return can('notes:view') ? (
-              <div key={m.id} className="mx-auto w-full max-w-[88%] rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-xs">
+              <div key={m.id} id={`msg-${m.id}`} className="mx-auto w-full max-w-[88%] rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-xs">
                 <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-warning">
                   <StickyNote className="h-3 w-3" /> Internal note · {m.author} · {m.time}
                 </div>
@@ -630,7 +879,7 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
             const langDifferent = m.from === "customer" && m.language && m.language !== AGENT_LANG;
             const isAgent = m.from === "agent";
             return (
-              <div key={m.id} className={cn("flex gap-2.5", isAgent && "flex-row-reverse")}>
+              <div key={m.id} id={`msg-${m.id}`} className={cn("flex gap-2.5", isAgent && "flex-row-reverse")}>
                 <div
                   title={isAgent ? (m.author === currentUserName ? `You · ${m.author}` : (m.author || "Agent")) : conversation.customer.name}
                   className={cn("flex h-7 w-7 shrink-0 cursor-default items-center justify-center rounded-full text-[10px] font-semibold",
@@ -1117,7 +1366,36 @@ Conversation link: https://support.zapmail.internal/inbox/${conv.id}`;
 
 // ─── Inline attachment rendering ─────────────────────────────────────────────
 
-import type { MessageAttachment } from "@/lib/mock-data";
+function AttachmentImage({ a }: { a: MessageAttachment }) {
+  const [loaded, setLoaded] = useState(false);
+  const [errored, setErrored] = useState(false);
+  const isBlob = a.url.startsWith("blob:");
+  return (
+    <a href={isBlob ? undefined : a.url} target={isBlob ? undefined : "_blank"} rel="noreferrer" className="block">
+      {/* Shimmer placeholder shown while remote URL loads; hidden immediately for blob (already in memory) */}
+      {!loaded && !errored && !isBlob && (
+        <div className="h-40 w-64 max-w-full animate-pulse rounded-lg bg-muted" />
+      )}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={a.url}
+        alt={a.name}
+        className={cn(
+          "max-h-64 max-w-full rounded-lg object-contain transition-opacity",
+          loaded || isBlob ? "opacity-100" : "opacity-0 absolute"
+        )}
+        style={{ maxWidth: "min(320px, 100%)" }}
+        onLoad={() => setLoaded(true)}
+        onError={() => setErrored(true)}
+      />
+      {errored && (
+        <div className="flex h-16 w-40 items-center justify-center rounded-lg bg-muted text-xs text-muted-foreground">
+          Image unavailable
+        </div>
+      )}
+    </a>
+  );
+}
 
 function MessageAttachments({ attachments, isAgent }: { attachments?: MessageAttachment[]; isAgent: boolean }) {
   if (!attachments?.length) return null;
@@ -1126,17 +1404,7 @@ function MessageAttachments({ attachments, isAgent }: { attachments?: MessageAtt
       {attachments.map((a, i) => {
         const ct = a.contentType || "";
         if (ct.startsWith("image/")) {
-          return (
-            <a key={i} href={a.url} target="_blank" rel="noreferrer" className="block">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={a.url}
-                alt={a.name}
-                className="max-h-64 max-w-full rounded-lg object-contain"
-                style={{ maxWidth: "min(320px, 100%)" }}
-              />
-            </a>
-          );
+          return <AttachmentImage key={i} a={a} />;
         }
         if (ct.startsWith("video/")) {
           return (

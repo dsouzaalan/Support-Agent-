@@ -92,6 +92,8 @@ export interface Conversation {
   unread: boolean;
   status: ConvStatus;
   assignedToMe: boolean;
+  assignedAgent?: { id: string; name: string; assignedById: string; assignedByName: string; assignedAt: string } | null;
+  intercomAssignee?: { id: string | number; name?: string; email?: string; type?: string } | null;
   createdByMe?: boolean;
   createdByAdmin?: { id: string; name: string } | null;
   messages: Message[];

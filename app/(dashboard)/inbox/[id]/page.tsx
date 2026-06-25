@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useCallback } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useEffect, useCallback, Suspense } from "react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useConversation } from "@/hooks/useConversation";
 import { useConversationsContext } from "@/contexts/ConversationsContext";
 import { ConversationThread } from "@/components/dashboard/ConversationThread";
@@ -10,9 +10,12 @@ import type { ConvStatus } from "@/lib/mock-data";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 
-export default function ConversationPage() {
+function ConversationPageContent() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const highlightMessageId = searchParams.get("msg") ?? undefined;
+  const searchQuery = searchParams.get("q") ?? undefined;
   const { conversations, setLocalStatus, patchConversation, refetch: refetchList, clickupLinks, linkClickup, latestUpdate } = useConversationsContext();
 
   const {
@@ -94,6 +97,16 @@ export default function ConversationPage() {
       onStatusChange={handleStatusChange}
       onTagsChange={(tags) => patchConversation(id, { tags })}
       onSnooze={handleSnooze}
+      highlightMessageId={highlightMessageId}
+      searchQuery={searchQuery}
     />
+  );
+}
+
+export default function ConversationPage() {
+  return (
+    <Suspense>
+      <ConversationPageContent />
+    </Suspense>
   );
 }
