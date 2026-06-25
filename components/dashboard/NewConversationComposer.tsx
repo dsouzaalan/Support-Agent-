@@ -8,8 +8,10 @@ import { api } from "@/lib/api";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
-  Search, Send, Loader2, X, MessageSquare, Mail, Phone, Smartphone,
+  Search, Send, Loader2, X, MessageSquare, Mail, Phone, Smartphone, UserPlus,
 } from "lucide-react";
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 type Channel = "chat" | "email" | "whatsapp" | "sms";
 
@@ -21,7 +23,7 @@ const CHANNELS: { id: Channel; label: string; icon: React.ReactNode; available: 
 ];
 
 interface ContactResult {
-  id: string;
+  id: string;   // empty string means "new contact — resolve by email on backend"
   name: string;
   email: string;
   company: string;
@@ -75,26 +77,32 @@ export function NewConversationComposer() {
     if (channel === "email" && !subject.trim()) { toast.error("Subject is required for email"); return; }
     setSubmitting(true);
     try {
-      const res = await api.conversations.create(
-        selectedContact.id,
-        body.trim(),
-        channel === "email" ? subject.trim() : undefined,
-        channel === "email" ? "email" : "inapp",
-      );
+      // If id is empty the contact doesn't exist yet — pass email so backend can find-or-create.
+      const res = selectedContact.id
+        ? await api.conversations.create(
+            selectedContact.id,
+            body.trim(),
+            channel === "email" ? subject.trim() : undefined,
+            channel === "email" ? "email" : "inapp",
+          )
+        : await api.conversations.createByEmail(
+            selectedContact.email,
+            body.trim(),
+            channel === "email" ? subject.trim() : undefined,
+            channel === "email" ? "email" : "inapp",
+          );
       const newId = res.data?.id;
-      if (newId) {
-        // Fetch the specific conversation and inject it into the list directly
-        // so it appears immediately without relying on refetch() timing or SSE
-        try {
-          const convRes = await api.conversations.get(newId);
-          if (convRes?.data) upsertConversation(convRes.data);
-        } catch {}
-        router.push(`/inbox/${newId}`);
-      } else {
-        await refetch();
-        router.push("/inbox");
-      }
       toast.success("Conversation started");
+      // Navigate immediately so the agent lands on the new conversation right away.
+      router.push(newId ? `/inbox/${newId}` : "/inbox");
+      // Inject into the sidebar list in the background — non-blocking.
+      if (newId) {
+        api.conversations.get(newId)
+          .then((convRes) => { if (convRes?.data) upsertConversation(convRes.data); })
+          .catch(() => refetch());
+      } else {
+        refetch();
+      }
     } catch (err: any) {
       toast.error(`Failed: ${err.message}`);
     } finally {
@@ -200,7 +208,25 @@ export function NewConversationComposer() {
               )}
 
               {searchQ.trim().length > 1 && !searching && contacts.length === 0 && (
-                <p className="mt-1 text-xs text-muted-foreground">No contacts found.</p>
+                EMAIL_RE.test(searchQ.trim()) ? (
+                  <button
+                    onClick={() => {
+                      const c = { id: "", name: searchQ.trim(), email: searchQ.trim(), company: "" };
+                      setSelectedContact(c);
+                      setComposingContact(c);
+                      setContacts([]);
+                    }}
+                    className="mt-1.5 flex w-full items-center gap-2 rounded-lg border border-dashed border-primary/40 bg-primary/5 px-3 py-2 text-left transition hover:bg-primary/10"
+                  >
+                    <UserPlus className="h-3.5 w-3.5 shrink-0 text-primary" />
+                    <div>
+                      <p className="text-xs font-medium text-primary">Start conversation with {searchQ.trim()}</p>
+                      <p className="text-[10px] text-muted-foreground">New contact will be created in Intercom</p>
+                    </div>
+                  </button>
+                ) : (
+                  <p className="mt-1 text-xs text-muted-foreground">No contacts found. Enter a full email to start with a new contact.</p>
+                )
               )}
             </>
           )}

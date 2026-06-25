@@ -74,9 +74,9 @@ const PERMISSION_GROUPS: { label: string; icon: React.ReactNode; keys: string[] 
     keys: ["notes:create", "notes:view"],
   },
   {
-    label: "Tags & Articles & Macros",
+    label: "Articles & Macros",
     icon: <Tag className="h-3.5 w-3.5" />,
-    keys: ["tags:apply", "tags:manage", "articles:view", "articles:manage", "macros:apply", "macros:manage"],
+    keys: ["articles:view", "articles:manage", "macros:apply", "macros:manage"],
   },
   {
     label: "Team",
@@ -102,8 +102,6 @@ const PERMISSION_LABELS: Record<string, string> = {
   "conversations:status":      "Change conversation status",
   "notes:create":              "Create internal notes",
   "notes:view":                "View internal notes",
-  "tags:apply":                "Apply tags",
-  "tags:manage":               "Create & delete tags",
   "articles:view":             "View articles",
   "articles:manage":           "Create & delete articles",
   "macros:apply":              "Apply macros",
@@ -126,7 +124,6 @@ export function AdminSettingsView({ onOpenConversation }: { onOpenConversation: 
     { key: "alerts",   label: "Alerts",    icon: <Bell className="h-3.5 w-3.5" />,     show: true },
     { key: "agents",   label: "Agents",    icon: <Users className="h-3.5 w-3.5" />,    show: isAdmin },
     { key: "macros",   label: "Macros",    icon: <FileText className="h-3.5 w-3.5" />, show: can("macros:manage") },
-    { key: "tags",     label: "Tags",      icon: <Hash className="h-3.5 w-3.5" />,     show: can("tags:manage") },
     { key: "articles", label: "Articles",  icon: <BookOpen className="h-3.5 w-3.5" />, show: can("articles:manage") },
   ].filter((t) => t.show);
 
@@ -162,7 +159,6 @@ export function AdminSettingsView({ onOpenConversation }: { onOpenConversation: 
         {activeTab === "alerts"   && <AlertsTab onOpenConversation={onOpenConversation} />}
         {activeTab === "agents"   && <AgentsTab />}
         {activeTab === "macros"   && <MacrosTab />}
-        {activeTab === "tags"     && <TagsTab />}
         {activeTab === "articles" && <ArticlesTab />}
       </div>
     </div>
@@ -758,81 +754,6 @@ function MacrosTab() {
                 {deletingId === m.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
               </button>
             </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ─── Tags tab ─────────────────────────────────────────────────────────────────
-
-function TagsTab() {
-  const [tags, setTags] = useState<Tag[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [newName, setNewName] = useState("");
-  const [creating, setCreating] = useState(false);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    api.tags.list()
-      .then((res) => setTags(res.data ?? []))
-      .finally(() => setLoading(false));
-  }, []);
-
-  const handleCreate = async () => {
-    if (!newName.trim()) return;
-    setCreating(true);
-    try {
-      const res = await api.tags.create(newName.trim());
-      setTags((prev) => [...prev, res.data]);
-      setNewName("");
-      toast.success("Tag created");
-      inputRef.current?.focus();
-    } catch (e: any) { toast.error(e.message); }
-    finally { setCreating(false); }
-  };
-
-  const handleDelete = async (id: string) => {
-    setDeletingId(id);
-    try {
-      await api.tags.delete(id);
-      setTags((prev) => prev.filter((t) => t.id !== id));
-      toast.success("Tag deleted");
-    } catch (e: any) { toast.error(e.message); }
-    finally { setDeletingId(null); }
-  };
-
-  if (loading) return <TabLoader />;
-
-  return (
-    <div className="mx-auto max-w-2xl px-4 py-5 sm:px-6 sm:py-6">
-      <SectionHeader icon={<Hash className="h-4 w-4" />} title="Tags" subtitle="Manage conversation labels" />
-      <div className="mt-4 flex gap-2">
-        <input
-          ref={inputRef}
-          value={newName}
-          onChange={(e) => setNewName(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") handleCreate(); }}
-          placeholder="New tag name…"
-          className="flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm focus:border-primary/50 focus:outline-none"
-        />
-        <button onClick={handleCreate} disabled={!newName.trim() || creating}
-          className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
-          {creating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />} Create
-        </button>
-      </div>
-      <div className="mt-4 flex flex-wrap gap-2">
-        {tags.length === 0 && <EmptyState label="No tags yet" />}
-        {tags.map((tag) => (
-          <div key={tag.id} className="flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-xs font-medium">
-            <Hash className="h-3 w-3 text-muted-foreground" />
-            {tag.name}
-            <button onClick={() => handleDelete(tag.id)} disabled={deletingId === tag.id}
-              className="ml-0.5 text-muted-foreground hover:text-danger disabled:opacity-50">
-              {deletingId === tag.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
-            </button>
           </div>
         ))}
       </div>

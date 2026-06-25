@@ -116,7 +116,11 @@ export const api = {
       apiFetch(`/conversations/${id}/snooze`, { method: 'POST', body: JSON.stringify({ snoozedUntil }) }),
     create: (contactId: string, body: string, subject?: string, messageType: 'inapp' | 'email' = 'inapp') =>
       apiFetch('/conversations', { method: 'POST', body: JSON.stringify({ contactId, body, subject, messageType }) }),
+    createByEmail: (email: string, body: string, subject?: string, messageType: 'inapp' | 'email' = 'inapp') =>
+      apiFetch('/conversations', { method: 'POST', body: JSON.stringify({ email, body, subject, messageType }) }),
     search: (q: string) => apiFetch(`/conversations/search?q=${encodeURIComponent(q)}`),
+    assign: (id: string, agentId: string | null) =>
+      apiFetch(`/conversations/${id}/assign`, { method: 'PATCH', body: JSON.stringify({ agentId }) }),
   },
 
   contacts: {

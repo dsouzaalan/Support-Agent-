@@ -1,0 +1,171 @@
+name: Deploy to Staging
+
+on:
+  push:
+    branches:
+      - staging
+
+jobs:
+  deploy:
+    name: Deployment to Staging
+    runs-on: self-hosted
+    outputs:
+      git_hash: ${{ steps.set_git_hash.outputs.git_hash }}
+
+    steps:
+      # Step 1: Checkout the code
+      - name: Checkout Code
+        uses: actions/checkout@v3
+      
+      - name: Capture deployed SHA
+        id: set_git_hash
+        run: echo "git_hash=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+
+      # Step 2: Set up SSH keys for deployment
+      - name: Set up SSH keys
+        env:
+          STAGE_HOST_IP: ${{ secrets.STAGE_HOST_IP }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.STAGE_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H $STAGE_HOST_IP >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+      # Step 3: Run deployment script via SSH
+      - name: Deploy Application
+        uses: appleboy/ssh-action@v0.1.10
+        with:
+          host: ${{ secrets.STAGE_HOST_IP }}
+          username: ${{ secrets.STAGE_SSH_USERNAME }}
+          key: ${{ secrets.STAGE_SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            cd /workspace/support-agent.reachinbox.xyz-fe
+            git fetch origin
+            git checkout staging 
+            git reset --hard origin/staging
+            npm i
+            npm run build
+            pm2 restart support-agent.reachinbox.xyz-fe
+  
+  purge-cache:
+    name: Purge Cloudflare Cache
+    needs: deploy
+    runs-on: [self-hosted, staging] 
+    steps:
+      - name: Resolve zone and purge cache
+        env:
+          CF_TOKEN: ${{ secrets.CF_CACHE_PURGE_TOKEN }}
+          HOST: support-agent.reachinbox.xyz
+        run: |
+          set -euo pipefail
+
+          api() {
+            curl -sS --max-time 15 -H "Authorization: Bearer ${CF_TOKEN}" \
+                 -H "Content-Type: application/json" "$@"
+          }
+
+          # Walk up hostname labels to find matching CF zone
+          ZONE_ID=""
+          ZONE_NAME=""
+          CANDIDATE="$HOST"
+          while [[ "$CANDIDATE" == *.* ]]; do
+            RESP=$(api "https://api.cloudflare.com/client/v4/zones?name=${CANDIDATE}")
+            ID=$(echo "$RESP" | jq -r '.result[0].id // empty')
+            if [ -n "$ID" ]; then
+              ZONE_ID="$ID"
+              ZONE_NAME="$CANDIDATE"
+              break
+            fi
+            CANDIDATE="${CANDIDATE#*.}"
+          done
+
+          if [ -z "$ZONE_ID" ]; then
+            echo "::error::No Cloudflare zone found for $HOST"
+            exit 1
+          fi
+          echo "Matched zone: $ZONE_NAME ($ZONE_ID)"
+
+          BODY=$(jq -nc --arg h "$HOST" '{hosts: [$h]}')
+          echo "Request: $BODY"
+
+          do_purge() {
+            api -w "\n%{http_code}" -X POST \
+              "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/purge_cache" \
+              --data "$BODY"
+          }
+
+          RESP=$(do_purge)
+          CODE=$(echo "$RESP" | tail -n1)
+          JSON=$(echo "$RESP" | sed '$d')
+
+          if [ "$CODE" = "429" ]; then
+            echo "Rate limited, retrying in 10s..."
+            sleep 10
+            RESP=$(do_purge)
+            CODE=$(echo "$RESP" | tail -n1)
+            JSON=$(echo "$RESP" | sed '$d')
+          fi
+
+          echo "HTTP $CODE"; echo "$JSON" | jq .
+
+          [ "$CODE" = "200" ] && [ "$(echo "$JSON" | jq -r .success)" = "true" ] \
+            || { echo "::error::Purge failed"; exit 1; }
+
+  notify:
+    name: Slack Notification
+    needs: [deploy, purge-cache]
+    runs-on: [self-hosted, staging] 
+    if: always()
+    steps:
+      - name: Send Slack notification
+        env:
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
+          PURGE_RESULT: ${{ needs.purge-cache.result }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ needs.deploy.outputs.git_hash }}
+          ACTOR: ${{ github.actor }}
+          REF: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          if [ "$DEPLOY_RESULT" = "success" ] && [ "$PURGE_RESULT" = "success" ]; then
+            COLOR="good"
+            TEXT="✅ *Staging Deploy Successful*"
+          elif [ "$DEPLOY_RESULT" = "success" ] && [ "$PURGE_RESULT" != "success" ]; then
+            COLOR="warning"
+            TEXT="⚠️ *Staging Deploy Successful — Cache Purge Failed*"
+          else
+            COLOR="danger"
+            TEXT="❌ *Staging Deploy Failed*"
+          fi
+
+          curl -sS --fail --max-time 15 --retry 2 --retry-delay 5 \
+            -X POST -H 'Content-type: application/json' --data "$(jq -nc \
+            --arg text    "$TEXT" \
+            --arg color   "$COLOR" \
+            --arg repo    "$REPO" \
+            --arg sha     "$SHA" \
+            --arg actor   "$ACTOR" \
+            --arg ref     "$REF" \
+            --arg env     "staging" \
+            --arg deploy  "$DEPLOY_RESULT" \
+            --arg purge   "$PURGE_RESULT" \
+            '{
+              text: $text,
+              attachments: [{
+                fallback: ("Deploy: " + $deploy + " | Cache purge: " + $purge),
+                color: $color,
+                text: ("*Repository*: " + $repo + "\n*Commit*: <https://github.com/" + $repo + "/commit/" + $sha + "|" + $sha + ">\n*Deployed by*: " + $actor),
+                fields: [
+                  {title: "Branch",       value: $ref,    short: true},
+                  {title: "Environment",  value: $env,    short: true},
+                  {title: "Deploy",       value: $deploy, short: true},
+                  {title: "Cache Purge",  value: $purge,  short: true}
+                ],
+                footer: "GitHub Actions",
+                footer_icon: "https://platform.slack-edge.com/img/default_application_icon.png"
+              }]
+            }')" \
+          "$SLACK_WEBHOOK_URL"

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import type { Conversation, TierType } from "@/lib/mock-data";
 import { TierBadge } from "./CustomerPanel";
-import { Search, Circle, AlertTriangle, Filter, Bookmark, Eye, ChevronDown, Plus, UserCheck, Loader2 } from "lucide-react";
+import { Search, Circle, AlertTriangle, Filter, Bookmark, Eye, ChevronDown, Plus, UserCheck, Loader2, UserRound } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
@@ -25,6 +25,24 @@ const SORTS: { id: Sort; label: string }[] = [
 const TIER_ORDER: Record<TierType, number> = { Platinum: 0, Gold: 1, Silver: 2, New: 3 };
 const SENTIMENT_ORDER = { negative: 0, neutral: 1, positive: 2 } as const;
 
+const TAG_PALETTE = [
+  { bg: "bg-violet-100 dark:bg-violet-900/40", text: "text-violet-700 dark:text-violet-300", dot: "bg-violet-500" },
+  { bg: "bg-blue-100 dark:bg-blue-900/40",     text: "text-blue-700 dark:text-blue-300",     dot: "bg-blue-500" },
+  { bg: "bg-emerald-100 dark:bg-emerald-900/40", text: "text-emerald-700 dark:text-emerald-300", dot: "bg-emerald-500" },
+  { bg: "bg-amber-100 dark:bg-amber-900/40",   text: "text-amber-700 dark:text-amber-300",   dot: "bg-amber-500" },
+  { bg: "bg-pink-100 dark:bg-pink-900/40",     text: "text-pink-700 dark:text-pink-300",     dot: "bg-pink-500" },
+  { bg: "bg-orange-100 dark:bg-orange-900/40", text: "text-orange-700 dark:text-orange-300", dot: "bg-orange-500" },
+  { bg: "bg-teal-100 dark:bg-teal-900/40",     text: "text-teal-700 dark:text-teal-300",     dot: "bg-teal-500" },
+  { bg: "bg-red-100 dark:bg-red-900/40",       text: "text-red-700 dark:text-red-300",       dot: "bg-red-500" },
+  { bg: "bg-indigo-100 dark:bg-indigo-900/40", text: "text-indigo-700 dark:text-indigo-300", dot: "bg-indigo-500" },
+  { bg: "bg-cyan-100 dark:bg-cyan-900/40",     text: "text-cyan-700 dark:text-cyan-300",     dot: "bg-cyan-500" },
+];
+function getTagColor(key: string) {
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = ((h << 5) - h + key.charCodeAt(i)) | 0;
+  return TAG_PALETTE[Math.abs(h) % TAG_PALETTE.length];
+}
+
 interface Props {
   conversations: Conversation[];
   selectedId: string;
@@ -32,9 +50,12 @@ interface Props {
   agentName: string;
   agentInitials: string;
   clickupLinks?: Record<string, string>;
+  onLoadMore?: () => void;
+  loadingMore?: boolean;
+  hasMore?: boolean;
 }
 
-export function ConversationList({ conversations, selectedId, onSelect, agentName, agentInitials, clickupLinks }: Props) {
+export function ConversationList({ conversations, selectedId, onSelect, agentName, agentInitials, clickupLinks, onLoadMore, loadingMore, hasMore }: Props) {
   const router = useRouter();
   const [tab, setTab] = useState<Tab>("All");
   const [q, setQ] = useState("");
@@ -47,6 +68,7 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
   const [unhealthyOnly, setUnhealthyOnly] = useState(false);
   const [savedView, setSavedView] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const listScrollRef = useRef<HTMLDivElement>(null);
 
   // Stable refs so the keyboard handler never goes stale
   const filteredRef = useRef<Conversation[]>([]);
@@ -99,6 +121,20 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
     return () => window.removeEventListener("keydown", handler);
   }, []);
 
+  // Infinite scroll — fetch next page when agent scrolls near the bottom
+  useEffect(() => {
+    const el = listScrollRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      if (!onLoadMore || !hasMore || loadingMore) return;
+      if (el.scrollHeight - el.scrollTop - el.clientHeight < 200) {
+        onLoadMore();
+      }
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [onLoadMore, hasMore, loadingMore]);
+
   // Debounced API search for queries 3+ chars — searches beyond the loaded 50
   useEffect(() => {
     if (searchDebounce.current) clearTimeout(searchDebounce.current);
@@ -119,11 +155,35 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
 
   const allTags = useMemo(() => Array.from(new Set(conversations.flatMap((c) => c.customer.tags))).sort(), [conversations]);
 
+  // Returns true if any field in this conversation matches the search query.
+  // Searches name, subject, email, tags, AND the full text of every message (replies, notes, macros).
+  const matchesQuery = useCallback((c: Conversation, qLow: string): boolean => {
+    if (
+      c.customer.name.toLowerCase().includes(qLow) ||
+      c.subject.toLowerCase().includes(qLow) ||
+      (c.customer.email ?? "").toLowerCase().includes(qLow) ||
+      c.customer.tags.some((t) => t.toLowerCase().includes(qLow))
+    ) return true;
+    return (c.messages ?? []).some((m) => m.text?.toLowerCase().includes(qLow));
+  }, []);
+
   const filtered = useMemo(() => {
-    // When we have API search results, use those as the base list instead of local conversations
-    const base = apiResults ?? conversations;
     const qLow = q.trim().toLowerCase();
     const isSearching = qLow.length > 0;
+
+    // When API results are available, use them as the primary set but ALSO merge in any
+    // locally-loaded conversations that match message text — Intercom's search API cannot
+    // search within conversation parts (replies/notes), so we fill that gap ourselves.
+    let base: Conversation[];
+    if (apiResults) {
+      const apiIds = new Set(apiResults.map((c) => c.id));
+      const localTextMatches = conversations.filter(
+        (c) => !apiIds.has(c.id) && matchesQuery(c, qLow)
+      );
+      base = [...apiResults, ...localTextMatches];
+    } else {
+      base = conversations;
+    }
 
     let list = base.filter((c) => {
       if (!isSearching) {
@@ -137,14 +197,9 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
       if (tierFilter !== "all" && c.customer.tier !== tierFilter) return false;
       if (tagFilter !== "all" && !c.customer.tags.includes(tagFilter)) return false;
       if (unhealthyOnly && c.customer.mailboxesDisconnected === 0 && c.customer.failedDomains === 0 && !c.customer.paymentExpired) return false;
-      // Local filter: match name, subject, preview, email (covers the loaded 50 for short queries)
+      // For short queries (< 3 chars) the API isn't called — filter locally across all fields.
       if (isSearching && !apiResults) {
-        const matches =
-          c.customer.name.toLowerCase().includes(qLow) ||
-          c.subject.toLowerCase().includes(qLow) ||
-          (c.preview ?? "").toLowerCase().includes(qLow) ||
-          (c.customer.email ?? "").toLowerCase().includes(qLow);
-        if (!matches) return false;
+        if (!matchesQuery(c, qLow)) return false;
       }
       return true;
     });
@@ -159,7 +214,7 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
       }
     });
     return list;
-  }, [conversations, tab, q, sort, tierFilter, tagFilter, unhealthyOnly]);
+  }, [conversations, tab, q, sort, tierFilter, tagFilter, unhealthyOnly, apiResults, matchesQuery]);
 
   // Keep filteredRef in sync so the keyboard handler sees the latest visible list
   filteredRef.current = filtered;
@@ -216,7 +271,7 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
             { value: "Platinum", label: "Platinum" }, { value: "Gold", label: "Gold" },
             { value: "Silver", label: "Silver" }, { value: "New", label: "New" },
           ]} />
-          <SelectFilter value={tagFilter} onChange={setTagFilter} options={[{ value: "all", label: "All tags" }, ...allTags.map((t) => ({ value: t, label: `#${t}` }))]} />
+          <SelectFilter value={tagFilter} onChange={setTagFilter} options={[{ value: "all", label: "All tags" }, ...allTags.map((t) => ({ value: t, label: t }))]} />
           <button onClick={() => setUnhealthyOnly(!unhealthyOnly)}
             className={cn("rounded-md border px-1.5 py-0.5 text-[10px] font-medium",
               unhealthyOnly ? "border-danger/40 bg-danger/10 text-danger" : "border-border text-muted-foreground hover:bg-muted")}>
@@ -236,9 +291,33 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
-        {filtered.map((c) => <ConvRow key={c.id} c={c} selected={c.id === selectedId} onSelect={() => onSelect(c.id)} clickupTicket={clickupLinks?.[c.id]} />)}
+      <div ref={listScrollRef} className="flex-1 overflow-y-auto">
+        {filtered.map((c) => (
+          <ConvRow
+            key={c.id}
+            c={c}
+            selected={c.id === selectedId}
+            onSelect={() => {
+              const sq = q.trim();
+              if (sq.length >= 2) {
+                router.push(`/inbox/${c.id}?q=${encodeURIComponent(sq)}`);
+              } else {
+                onSelect(c.id);
+              }
+            }}
+            clickupTicket={clickupLinks?.[c.id]}
+            searchQuery={q.trim()}
+          />
+        ))}
         {filtered.length === 0 && <div className="px-4 py-12 text-center text-xs text-muted-foreground">No conversations match.</div>}
+        {loadingMore && (
+          <div className="flex items-center justify-center gap-2 py-4 text-xs text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading more…
+          </div>
+        )}
+        {!hasMore && conversations.length > 0 && !q.trim() && (
+          <div className="py-4 text-center text-xs text-muted-foreground">All conversations loaded</div>
+        )}
       </div>
 
       <div className="flex items-center gap-2 border-t border-border bg-card px-4 py-3">
@@ -269,7 +348,22 @@ function formatSnoozedUntil(ts: number): string {
   return `Snoozed · ${new Date(ts * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`;
 }
 
-function ConvRow({ c, selected, onSelect, clickupTicket }: { c: Conversation; selected: boolean; onSelect: () => void; clickupTicket?: string }) {
+function buildSnippet(messages: Array<{ text?: string }>, qLow: string): { before: string; match: string; after: string } | null {
+  const msg = messages.find((m) => m.text?.toLowerCase().includes(qLow));
+  if (!msg?.text) return null;
+  const text = msg.text;
+  const idx = text.toLowerCase().indexOf(qLow);
+  if (idx === -1) return null;
+  const start = Math.max(0, idx - 30);
+  const end = Math.min(text.length, idx + qLow.length + 50);
+  return {
+    before: (start > 0 ? "…" : "") + text.slice(start, idx),
+    match: text.slice(idx, idx + qLow.length),
+    after: text.slice(idx + qLow.length, end) + (end < text.length ? "…" : ""),
+  };
+}
+
+function ConvRow({ c, selected, onSelect, clickupTicket, searchQuery }: { c: Conversation; selected: boolean; onSelect: () => void; clickupTicket?: string; searchQuery?: string }) {
   const sentDot = c.customer.sentiment === "negative" ? "bg-danger" : c.customer.sentiment === "neutral" ? "bg-warning" : "bg-success";
   const isWaiting = c.waitMinutes >= 0;
   const waitRatio = isWaiting ? c.waitMinutes / c.slaMinutes : 0;
@@ -317,6 +411,26 @@ function ConvRow({ c, selected, onSelect, clickupTicket }: { c: Conversation; se
             </TooltipProvider>
           )}
           {c.firstResponsePending && <span className="rounded bg-danger/15 px-1 py-0 text-[9px] font-semibold uppercase text-danger">1st reply</span>}
+          {(() => {
+            const name = c.assignedAgent?.name || c.intercomAssignee?.name || null;
+            const isAssigned = !!(c.assignedAgent || c.intercomAssignee);
+            if (!isAssigned) return null;
+            return (
+              <TooltipProvider delayDuration={200}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex items-center gap-0.5 rounded bg-violet-500/10 px-1 py-0 text-[9px] font-semibold text-violet-600 dark:text-violet-400">
+                      <UserRound className="h-2.5 w-2.5" />
+                      {name ? name.split(" ")[0] : "Assigned"}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">
+                    <p className="text-xs">Assigned to {name ?? "an agent"}</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            );
+          })()}
           {c.triggerFlags?.includes("chargeback-risk") && (
             <span className="inline-flex items-center gap-0.5 rounded bg-danger/15 px-1 py-0 text-[9px] font-semibold text-danger">
               <AlertTriangle className="h-2.5 w-2.5" />risk
@@ -332,27 +446,47 @@ function ConvRow({ c, selected, onSelect, clickupTicket }: { c: Conversation; se
         {c.subject && (
           <div className="mt-0.5 truncate text-xs font-medium text-foreground/75">{c.subject}</div>
         )}
-        <div className="mt-0.5 flex items-center gap-1">
-          <p className="truncate text-xs text-muted-foreground">
-            {c.preview || ""}
-          </p>
-          {c.unread && <Circle className="h-2 w-2 shrink-0 fill-primary text-primary" />}
-        </div>
+        {(() => {
+          const qLow = searchQuery?.trim().toLowerCase() ?? "";
+          const snippet = qLow.length >= 2 ? buildSnippet(c.messages ?? [], qLow) : null;
+          return (
+            <div className="mt-0.5 flex items-center gap-1">
+              <p className="truncate text-xs text-muted-foreground">
+                {snippet ? (
+                  <>{snippet.before}<mark className="bg-primary/20 text-primary font-medium not-italic rounded-sm px-0.5">{snippet.match}</mark>{snippet.after}</>
+                ) : (
+                  c.preview || ""
+                )}
+              </p>
+              {c.unread && <Circle className="h-2 w-2 shrink-0 fill-primary text-primary" />}
+            </div>
+          );
+        })()}
         {visibleTags.length > 0 && (
           <div className="mt-1.5 flex items-center gap-1">
-            {visibleTags.map((t) => (
-              <span key={t} className="rounded-sm bg-muted/70 px-1 py-0 text-[9px] text-muted-foreground/80">#{t}</span>
-            ))}
+            {visibleTags.map((t) => {
+              const color = getTagColor(t);
+              return (
+                <span key={t} className={cn("inline-flex items-center gap-1 rounded-full px-1.5 py-0 text-[9px] font-semibold", color.bg, color.text)}>
+                  <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", color.dot)} />{t}
+                </span>
+              );
+            })}
             {extraTags > 0 && (
-              <span className="rounded-sm bg-muted/70 px-1 py-0 text-[9px] text-muted-foreground/80">+{extraTags}</span>
+              <span className="rounded-full bg-muted/70 px-1.5 py-0 text-[9px] text-muted-foreground/80">+{extraTags}</span>
             )}
           </div>
         )}
         {c.tags && c.tags.length > 0 && (
           <div className="mt-1 flex flex-wrap items-center gap-1">
-            {c.tags.map((t) => (
-              <span key={t.id} className="rounded-full bg-primary/10 px-1.5 py-0 text-[9px] font-medium text-primary">#{t.name}</span>
-            ))}
+            {c.tags.map((t) => {
+              const color = getTagColor(t.id);
+              return (
+                <span key={t.id} className={cn("inline-flex items-center gap-1 rounded-full px-1.5 py-0 text-[9px] font-semibold", color.bg, color.text)}>
+                  <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", color.dot)} />{t.name}
+                </span>
+              );
+            })}
           </div>
         )}
       </div>
