@@ -167,7 +167,7 @@ function MetaDetails({ log }: { log: AuditLogRow }) {
       )}
       {isConvAction && (
         <a
-          href={`/inbox/${encodeURIComponent(log.targetId)}${
+          href={`/inbox/${encodeURIComponent(log.targetId ?? '')}${
             m?.partId ? `?msg=${encodeURIComponent(m.partId)}` :
             m?.partIds?.[0] ? `?msg=${encodeURIComponent(m.partIds[0])}` : ''
           }`}

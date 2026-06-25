@@ -9,18 +9,28 @@ import {
   TrendingUp, TrendingDown, Minus, AlertTriangle, CheckCircle2, XCircle,
   Mail, Globe, Zap, CreditCard, ExternalLink, BarChart3, Sparkles,
   ArrowRight, Loader2, Plus, X, ShieldAlert, History, Package,
-  Send, Pencil, Trash2, Clock, Monitor, AlertOctagon,
+  Send, Pencil, Trash2, Clock, Monitor, AlertOctagon, UserRound, UserCheck,
 } from "lucide-react";
 
 const CURRENT_AGENT = { id: "me", name: "Riley Park", isAdmin: false };
 
-export function CustomerPanel({ customer, clickupTicket, conversationTags }: { customer: Customer; clickupTicket?: string; conversationTags?: { id: string; name: string }[] }) {
+type AssignedAgent = { id: string; name: string; assignedById: string; assignedByName: string; assignedAt: string } | null | undefined;
+type IntercomAssignee = { id: string | number; name?: string; email?: string; type?: string } | null | undefined;
+
+export function CustomerPanel({ customer, clickupTicket, conversationTags, assignedAgent, intercomAssignee }: {
+  customer: Customer;
+  clickupTicket?: string;
+  conversationTags?: { id: string; name: string }[];
+  assignedAgent?: AssignedAgent;
+  intercomAssignee?: IntercomAssignee;
+}) {
   const [tags, setTags] = useState<string[]>(customer.tags);
   const [notes, setNotes] = useState<CustomerNote[]>(customer.notes);
 
   return (
     <aside className="flex w-full flex-col overflow-y-auto border-l border-border bg-card">
       <Identity customer={customer} tags={tags} setTags={setTags} clickupTicket={clickupTicket} conversationTags={conversationTags} />
+      <Assignment assignedAgent={assignedAgent} intercomAssignee={intercomAssignee} />
       <AccountTrend customer={customer} />
       <Snapshot customer={customer} />
       <Products customer={customer} />
@@ -164,6 +174,66 @@ function Identity({ customer, tags, setTags, clickupTicket, conversationTags }: 
         </div>
       )}
     </div>
+  );
+}
+
+function Assignment({ assignedAgent, intercomAssignee }: { assignedAgent?: AssignedAgent; intercomAssignee?: IntercomAssignee }) {
+  const assigneeName = assignedAgent?.name || intercomAssignee?.name || null;
+  const assignedByName = assignedAgent?.assignedByName || null;
+  const assignedAt = assignedAgent?.assignedAt
+    ? new Date(assignedAgent.assignedAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+    : null;
+  const isAssigned = !!(assignedAgent || intercomAssignee);
+  const isLocalAssignment = !!assignedAgent;
+
+  return (
+    <Section title="Assignment">
+      {isAssigned ? (
+        <div className="space-y-2.5">
+          {/* Assignee row */}
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-violet-500/15 text-xs font-bold text-violet-600 dark:text-violet-400">
+              {assigneeName ? assigneeName.charAt(0).toUpperCase() : "?"}
+            </div>
+            <div className="min-w-0">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">Assignee</div>
+              <div className="truncate text-sm font-medium text-foreground">{assigneeName ?? "Unknown agent"}</div>
+            </div>
+            <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-violet-500/10 px-2 py-0.5 text-[9px] font-semibold text-violet-600 dark:text-violet-400">
+              <UserRound className="h-2.5 w-2.5" />assigned
+            </span>
+          </div>
+
+          {/* Who assigned + when */}
+          {isLocalAssignment && (assignedByName || assignedAt) && (
+            <div className="flex items-start gap-2 rounded-md border border-border bg-background px-2.5 py-2">
+              <UserCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <div className="min-w-0 text-xs text-muted-foreground">
+                {assignedByName && (
+                  <span>Assigned by <span className="font-medium text-foreground/80">{assignedByName}</span></span>
+                )}
+                {assignedAt && (
+                  <div className="mt-0.5 text-[10px]">{assignedAt}</div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Intercom-only label when no local assignment */}
+          {!isLocalAssignment && intercomAssignee?.name && (
+            <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+              <span className="rounded bg-muted px-1.5 py-0.5 font-semibold uppercase">Intercom</span>
+              assigned in Intercom dashboard
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 rounded-md border border-dashed border-border px-2.5 py-2.5 text-xs text-muted-foreground">
+          <UserRound className="h-3.5 w-3.5 shrink-0 opacity-50" />
+          Unassigned
+        </div>
+      )}
+    </Section>
   );
 }
 

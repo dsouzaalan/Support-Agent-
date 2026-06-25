@@ -92,6 +92,13 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
   const shortcutsBtnRef = useRef<HTMLButtonElement>(null);
   const [showSnoozeMenu, setShowSnoozeMenu] = useState(false);
 
+  // Assignment
+  const [showAssignMenu, setShowAssignMenu] = useState(false);
+  const [agentList, setAgentList] = useState<{ id: string; name: string }[]>([]);
+  const [agentListLoading, setAgentListLoading] = useState(false);
+  const [assigning, setAssigning] = useState(false);
+  const [localAssignedAgent, setLocalAssignedAgent] = useState(conversation.assignedAgent ?? null);
+
   // Tags
   const [convTags, setConvTags] = useState<{ id: string; name: string }[]>(conversation.tags ?? []);
   const [allTags, setAllTags] = useState<{ id: string; name: string }[]>([]);
@@ -157,6 +164,7 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
       setShowTranslated({}); setMcpResult(null);
       setConvTags(conversation.tags ?? []);
       setAttachedFiles([]);
+      setLocalAssignedAgent(conversation.assignedAgent ?? null);
       scrolledForRef.current = undefined;
       setLocalMessages(conversation.messages);
       if (!highlightMessageId && !searchQuery?.trim()) {
@@ -198,8 +206,10 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
         if (!changed && toAppend.length === 0) return prev;
         return toAppend.length > 0 ? [...updated, ...toAppend] : updated;
       });
+      // Sync assignment from SSE
+      setLocalAssignedAgent(conversation.assignedAgent ?? null);
     }
-  }, [conversation.id, conversation.messages]);
+  }, [conversation.id, conversation.messages, conversation.assignedAgent]);
 
   // Scroll to and ring-highlight the target message once per navigation.
   // Also depends on localMessages so it retries after the full conversation loads
@@ -535,6 +545,16 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
                 <ClipboardList className="h-2.5 w-2.5" />{clickupTicket}
               </a>
             )}
+            {(() => {
+              const name = localAssignedAgent?.name || conversation.intercomAssignee?.name || null;
+              if (!name) return null;
+              return (
+                <span className="inline-flex items-center gap-1 rounded-full bg-violet-500/10 px-2 py-0.5 text-[10px] font-semibold text-violet-600 dark:text-violet-400">
+                  <UserPlus className="h-2.5 w-2.5" />
+                  {name}
+                </span>
+              );
+            })()}
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
             {(() => {
@@ -651,7 +671,96 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
           </div>
         </div>
         <div className="flex items-center gap-1">
-          {can('conversations:assign') && <IconBtn label="Reassign"><UserPlus className="h-4 w-4" /></IconBtn>}
+          {can('conversations:assign') && (
+            <div className="relative">
+              {showAssignMenu && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowAssignMenu(false)} />
+                  <div className="absolute right-0 top-full z-50 mt-1 w-52 rounded-lg border border-border bg-card shadow-lg">
+                    <div className="px-3 py-1.5 text-[10px] font-semibold uppercase text-muted-foreground">Assign to</div>
+                    {agentListLoading ? (
+                      <div className="flex items-center gap-1.5 px-3 py-2 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" />Loading…</div>
+                    ) : (
+                      <>
+                        {localAssignedAgent && (
+                          <button
+                            disabled={assigning}
+                            onClick={async () => {
+                              setAssigning(true);
+                              try {
+                                await api.conversations.assign(conversation.id, null);
+                                setLocalAssignedAgent(null);
+                                toast.success('Unassigned');
+                              } catch { toast.error('Failed to unassign'); }
+                              finally { setAssigning(false); setShowAssignMenu(false); }
+                            }}
+                            className="block w-full px-3 py-1.5 text-left text-xs text-muted-foreground hover:bg-muted"
+                          >
+                            {assigning ? <Loader2 className="h-3 w-3 animate-spin inline mr-1" /> : null}
+                            Unassign
+                          </button>
+                        )}
+                        {agentList.map((a) => (
+                          <button
+                            key={a.id}
+                            disabled={assigning}
+                            onClick={async () => {
+                              setAssigning(true);
+                              try {
+                                await api.conversations.assign(conversation.id, a.id);
+                                setLocalAssignedAgent({ id: a.id, name: a.name, assignedById: user?.id ?? '', assignedByName: currentUserName, assignedAt: new Date().toISOString() });
+                                toast.success(`Assigned to ${a.name}`);
+                              } catch { toast.error('Failed to assign'); }
+                              finally { setAssigning(false); setShowAssignMenu(false); }
+                            }}
+                            className={cn(
+                              "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-muted",
+                              localAssignedAgent?.id === a.id && "font-medium text-primary"
+                            )}
+                          >
+                            <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[9px] font-bold text-primary">
+                              {a.name.charAt(0).toUpperCase()}
+                            </span>
+                            {a.name}
+                            {localAssignedAgent?.id === a.id && <span className="ml-auto text-[10px] text-primary">✓</span>}
+                          </button>
+                        ))}
+                      </>
+                    )}
+                  </div>
+                </>
+              )}
+              <div className="relative flex items-center gap-1">
+                <IconBtn
+                  label={localAssignedAgent ? `Assigned to ${localAssignedAgent.name}` : 'Assign'}
+                  onClick={async () => {
+                    if (!showAssignMenu && agentList.length === 0) {
+                      setAgentListLoading(true);
+                      try {
+                        const res = await api.agents.list();
+                        const agents: any[] = res.data ?? [];
+                        setAgentList(agents.filter((a) => a.status === 'active').map((a: any) => ({
+                          id: a.id,
+                          name: [a.firstName, a.lastName].filter(Boolean).join(' ').trim() || a.email,
+                        })));
+                      } catch { toast.error('Could not load agents'); }
+                      finally { setAgentListLoading(false); }
+                    }
+                    setShowAssignMenu((v) => !v);
+                  }}
+                >
+                  {assigning
+                    ? <Loader2 className="h-4 w-4 animate-spin" />
+                    : <UserPlus className={cn("h-4 w-4", localAssignedAgent && "text-primary")} />}
+                </IconBtn>
+                {localAssignedAgent && (
+                  <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-primary/10 text-[9px] font-bold text-primary" title={`Assigned to ${localAssignedAgent.name}`}>
+                    {localAssignedAgent.name.charAt(0).toUpperCase()}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
           {/* Snooze */}
           {can('conversations:status') && (
             <div className="relative">

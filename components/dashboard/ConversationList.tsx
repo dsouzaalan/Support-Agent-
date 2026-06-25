@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import type { Conversation, TierType } from "@/lib/mock-data";
 import { TierBadge } from "./CustomerPanel";
-import { Search, Circle, AlertTriangle, Filter, Bookmark, Eye, ChevronDown, Plus, UserCheck, Loader2 } from "lucide-react";
+import { Search, Circle, AlertTriangle, Filter, Bookmark, Eye, ChevronDown, Plus, UserCheck, Loader2, UserRound } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
@@ -411,6 +411,26 @@ function ConvRow({ c, selected, onSelect, clickupTicket, searchQuery }: { c: Con
             </TooltipProvider>
           )}
           {c.firstResponsePending && <span className="rounded bg-danger/15 px-1 py-0 text-[9px] font-semibold uppercase text-danger">1st reply</span>}
+          {(() => {
+            const name = c.assignedAgent?.name || c.intercomAssignee?.name || null;
+            const isAssigned = !!(c.assignedAgent || c.intercomAssignee);
+            if (!isAssigned) return null;
+            return (
+              <TooltipProvider delayDuration={200}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex items-center gap-0.5 rounded bg-violet-500/10 px-1 py-0 text-[9px] font-semibold text-violet-600 dark:text-violet-400">
+                      <UserRound className="h-2.5 w-2.5" />
+                      {name ? name.split(" ")[0] : "Assigned"}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">
+                    <p className="text-xs">Assigned to {name ?? "an agent"}</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            );
+          })()}
           {c.triggerFlags?.includes("chargeback-risk") && (
             <span className="inline-flex items-center gap-0.5 rounded bg-danger/15 px-1 py-0 text-[9px] font-semibold text-danger">
               <AlertTriangle className="h-2.5 w-2.5" />risk
