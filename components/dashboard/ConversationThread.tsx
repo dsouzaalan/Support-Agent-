@@ -37,6 +37,7 @@ interface ThreadProps {
   onTagsChange?: (tags: { id: string; name: string }[]) => void;
   onSnooze?: (snoozedUntil: number) => void;
   highlightMessageId?: string;
+  searchQuery?: string;
 }
 
 function nameInitials(name: string): string {
@@ -50,7 +51,7 @@ const SNOOZE_OPTIONS = [
   { label: "Next week",   getTime: () => Math.floor(Date.now() / 1000) + 7 * 24 * 3600 },
 ];
 
-export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl, onLinkClickup, onStatusChange, onTagsChange, onSnooze, highlightMessageId }: ThreadProps) {
+export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl, onLinkClickup, onStatusChange, onTagsChange, onSnooze, highlightMessageId, searchQuery }: ThreadProps) {
   const { user } = useAuth();
   const { can } = usePermissions();
   const currentUserName = user ? `${user.firstName} ${user.lastName ?? ""}`.trim() : "Agent";
@@ -111,33 +112,53 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
   const canRef = useRef(can);
   canRef.current = can;
 
+  // Resolve which message to highlight:
+  // - explicit partId from audit log link (?msg=...)
+  // - OR first message whose text contains the search query (?q=...)
+  const resolvedHighlightId = useMemo(() => {
+    if (highlightMessageId) return highlightMessageId;
+    if (!searchQuery?.trim()) return undefined;
+    const qLow = searchQuery.trim().toLowerCase();
+    return localMessages.find((m) => m.text?.toLowerCase().includes(qLow))?.id;
+  }, [highlightMessageId, searchQuery, localMessages]);
+
+  // Track which target we've already scrolled to so SSE message updates don't re-trigger it.
+  const scrolledForRef = useRef<string | undefined>(undefined);
+
   useEffect(() => {
     setDraft(""); setToneCheck(null); setTranslatePreview(null);
     setShowTranslated({}); setMcpResult(null); setLocalMessages(conversation.messages);
     setConvTags(conversation.tags ?? []);
     setAttachedFiles([]);
-
-    // Don't auto-scroll to bottom when we're deep-linking to a specific message.
-    if (!highlightMessageId) {
+    // Reset scroll guard when switching conversations.
+    scrolledForRef.current = undefined;
+    // Only auto-scroll to bottom when there's no deep-link target.
+    if (!highlightMessageId && !searchQuery?.trim()) {
       scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
     }
   }, [conversation.id, conversation.messages]);
 
-  // Scroll to and briefly highlight the linked message when arriving from an audit log link.
-  // setTimeout defers until after all effects and DOM paints in this cycle have settled.
+  // Scroll to and ring-highlight the target message once per navigation.
+  // Also depends on localMessages so it retries after the full conversation loads
+  // (the element may not exist yet when the effect first fires from the URL param).
   useEffect(() => {
-    if (!highlightMessageId) return;
+    if (!resolvedHighlightId) return;
+    if (scrolledForRef.current === resolvedHighlightId) return;
+
     const t = setTimeout(() => {
-      const el = document.getElementById(`msg-${highlightMessageId}`);
-      if (!el) return;
+      const el = document.getElementById(`msg-${resolvedHighlightId}`);
+      if (!el) return; // messages not rendered yet — will retry when localMessages updates
+      scrolledForRef.current = resolvedHighlightId;
       el.scrollIntoView({ behavior: "smooth", block: "center" });
       el.classList.add("ring-2", "ring-primary", "ring-offset-2", "rounded-xl");
+      // Clean ?msg= / ?q= from the URL once we've landed — no need for it to persist.
+      window.history.replaceState({}, '', window.location.pathname);
       setTimeout(() => {
         el.classList.remove("ring-2", "ring-primary", "ring-offset-2", "rounded-xl");
       }, 2500);
-    }, 100);
+    }, 200);
     return () => clearTimeout(t);
-  }, [highlightMessageId, localMessages]);
+  }, [resolvedHighlightId, localMessages]);
 
   // Load tags, macros, articles once on mount
   useEffect(() => {

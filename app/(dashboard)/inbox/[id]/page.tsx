@@ -15,6 +15,7 @@ function ConversationPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const highlightMessageId = searchParams.get("msg") ?? undefined;
+  const searchQuery = searchParams.get("q") ?? undefined;
   const { conversations, setLocalStatus, patchConversation, refetch: refetchList, clickupLinks, linkClickup, latestUpdate } = useConversationsContext();
 
   const {
@@ -97,6 +98,7 @@ function ConversationPageContent() {
       onTagsChange={(tags) => patchConversation(id, { tags })}
       onSnooze={handleSnooze}
       highlightMessageId={highlightMessageId}
+      searchQuery={searchQuery}
     />
   );
 }

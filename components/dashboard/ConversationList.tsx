@@ -119,11 +119,35 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
 
   const allTags = useMemo(() => Array.from(new Set(conversations.flatMap((c) => c.customer.tags))).sort(), [conversations]);
 
+  // Returns true if any field in this conversation matches the search query.
+  // Searches name, subject, email, tags, AND the full text of every message (replies, notes, macros).
+  const matchesQuery = useCallback((c: Conversation, qLow: string): boolean => {
+    if (
+      c.customer.name.toLowerCase().includes(qLow) ||
+      c.subject.toLowerCase().includes(qLow) ||
+      (c.customer.email ?? "").toLowerCase().includes(qLow) ||
+      c.customer.tags.some((t) => t.toLowerCase().includes(qLow))
+    ) return true;
+    return (c.messages ?? []).some((m) => m.text?.toLowerCase().includes(qLow));
+  }, []);
+
   const filtered = useMemo(() => {
-    // When we have API search results, use those as the base list instead of local conversations
-    const base = apiResults ?? conversations;
     const qLow = q.trim().toLowerCase();
     const isSearching = qLow.length > 0;
+
+    // When API results are available, use them as the primary set but ALSO merge in any
+    // locally-loaded conversations that match message text — Intercom's search API cannot
+    // search within conversation parts (replies/notes), so we fill that gap ourselves.
+    let base: Conversation[];
+    if (apiResults) {
+      const apiIds = new Set(apiResults.map((c) => c.id));
+      const localTextMatches = conversations.filter(
+        (c) => !apiIds.has(c.id) && matchesQuery(c, qLow)
+      );
+      base = [...apiResults, ...localTextMatches];
+    } else {
+      base = conversations;
+    }
 
     let list = base.filter((c) => {
       if (!isSearching) {
@@ -137,14 +161,9 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
       if (tierFilter !== "all" && c.customer.tier !== tierFilter) return false;
       if (tagFilter !== "all" && !c.customer.tags.includes(tagFilter)) return false;
       if (unhealthyOnly && c.customer.mailboxesDisconnected === 0 && c.customer.failedDomains === 0 && !c.customer.paymentExpired) return false;
-      // Local filter: match name, subject, preview, email (covers the loaded 50 for short queries)
+      // For short queries (< 3 chars) the API isn't called — filter locally across all fields.
       if (isSearching && !apiResults) {
-        const matches =
-          c.customer.name.toLowerCase().includes(qLow) ||
-          c.subject.toLowerCase().includes(qLow) ||
-          (c.preview ?? "").toLowerCase().includes(qLow) ||
-          (c.customer.email ?? "").toLowerCase().includes(qLow);
-        if (!matches) return false;
+        if (!matchesQuery(c, qLow)) return false;
       }
       return true;
     });
@@ -237,7 +256,23 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        {filtered.map((c) => <ConvRow key={c.id} c={c} selected={c.id === selectedId} onSelect={() => onSelect(c.id)} clickupTicket={clickupLinks?.[c.id]} />)}
+        {filtered.map((c) => (
+          <ConvRow
+            key={c.id}
+            c={c}
+            selected={c.id === selectedId}
+            onSelect={() => {
+              const sq = q.trim();
+              if (sq.length >= 2) {
+                router.push(`/inbox/${c.id}?q=${encodeURIComponent(sq)}`);
+              } else {
+                onSelect(c.id);
+              }
+            }}
+            clickupTicket={clickupLinks?.[c.id]}
+            searchQuery={q.trim()}
+          />
+        ))}
         {filtered.length === 0 && <div className="px-4 py-12 text-center text-xs text-muted-foreground">No conversations match.</div>}
       </div>
 
@@ -269,7 +304,22 @@ function formatSnoozedUntil(ts: number): string {
   return `Snoozed · ${new Date(ts * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`;
 }
 
-function ConvRow({ c, selected, onSelect, clickupTicket }: { c: Conversation; selected: boolean; onSelect: () => void; clickupTicket?: string }) {
+function buildSnippet(messages: Array<{ text?: string }>, qLow: string): { before: string; match: string; after: string } | null {
+  const msg = messages.find((m) => m.text?.toLowerCase().includes(qLow));
+  if (!msg?.text) return null;
+  const text = msg.text;
+  const idx = text.toLowerCase().indexOf(qLow);
+  if (idx === -1) return null;
+  const start = Math.max(0, idx - 30);
+  const end = Math.min(text.length, idx + qLow.length + 50);
+  return {
+    before: (start > 0 ? "…" : "") + text.slice(start, idx),
+    match: text.slice(idx, idx + qLow.length),
+    after: text.slice(idx + qLow.length, end) + (end < text.length ? "…" : ""),
+  };
+}
+
+function ConvRow({ c, selected, onSelect, clickupTicket, searchQuery }: { c: Conversation; selected: boolean; onSelect: () => void; clickupTicket?: string; searchQuery?: string }) {
   const sentDot = c.customer.sentiment === "negative" ? "bg-danger" : c.customer.sentiment === "neutral" ? "bg-warning" : "bg-success";
   const isWaiting = c.waitMinutes >= 0;
   const waitRatio = isWaiting ? c.waitMinutes / c.slaMinutes : 0;
@@ -332,12 +382,22 @@ function ConvRow({ c, selected, onSelect, clickupTicket }: { c: Conversation; se
         {c.subject && (
           <div className="mt-0.5 truncate text-xs font-medium text-foreground/75">{c.subject}</div>
         )}
-        <div className="mt-0.5 flex items-center gap-1">
-          <p className="truncate text-xs text-muted-foreground">
-            {c.preview || ""}
-          </p>
-          {c.unread && <Circle className="h-2 w-2 shrink-0 fill-primary text-primary" />}
-        </div>
+        {(() => {
+          const qLow = searchQuery?.trim().toLowerCase() ?? "";
+          const snippet = qLow.length >= 2 ? buildSnippet(c.messages ?? [], qLow) : null;
+          return (
+            <div className="mt-0.5 flex items-center gap-1">
+              <p className="truncate text-xs text-muted-foreground">
+                {snippet ? (
+                  <>{snippet.before}<mark className="bg-primary/20 text-primary font-medium not-italic rounded-sm px-0.5">{snippet.match}</mark>{snippet.after}</>
+                ) : (
+                  c.preview || ""
+                )}
+              </p>
+              {c.unread && <Circle className="h-2 w-2 shrink-0 fill-primary text-primary" />}
+            </div>
+          );
+        })()}
         {visibleTags.length > 0 && (
           <div className="mt-1.5 flex items-center gap-1">
             {visibleTags.map((t) => (
