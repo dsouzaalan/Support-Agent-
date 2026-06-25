@@ -163,36 +163,39 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
         scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
       }
     } else {
-      // SSE update on the same conversation.
+      // SSE update on the same conversation — merge server state into local state.
       setLocalMessages((prev) => {
-        const prevIds = new Set(prev.map((m) => m.id));
-        const incoming = conversation.messages.filter((m) => !prevIds.has(m.id));
-        if (incoming.length === 0) return prev;
+        const prevById = new Map(prev.map((m) => [m.id, m]));
+        let changed = false;
+        let updated = prev.map((m) => {
+          const serverVersion = conversation.messages.find((s) => s.id === m.id);
+          if (!serverVersion || m.id.startsWith("opt-")) return m;
+          // Merge server data into existing message (keeps read state, text, attachments fresh)
+          const merged = { ...serverVersion, attachments: serverVersion.attachments?.map((a, i) => ({ ...a, name: m.attachments?.[i]?.name ?? a.name })) };
+          if (JSON.stringify(merged) !== JSON.stringify(m)) { changed = true; return merged; }
+          return m;
+        });
 
-        let updated = [...prev];
         const toAppend: Message[] = [];
-
-        for (const serverMsg of incoming) {
-          // Agent messages from the server are confirmations of our optimistic messages.
-          // Replace the earliest pending optimistic message to avoid duplication.
+        for (const serverMsg of conversation.messages) {
+          if (prevById.has(serverMsg.id)) continue;
+          // New agent message — replace earliest optimistic placeholder to avoid duplication.
           if (serverMsg.from === "agent") {
             const optIdx = updated.findIndex((m) => m.id.startsWith("opt-"));
             if (optIdx !== -1) {
               const opt = updated[optIdx];
-              // Use server message but preserve the original attachment names.
               updated[optIdx] = {
                 ...serverMsg,
-                attachments: serverMsg.attachments?.map((a, i) => ({
-                  ...a,
-                  name: opt.attachments?.[i]?.name ?? a.name,
-                })),
+                attachments: serverMsg.attachments?.map((a, i) => ({ ...a, name: opt.attachments?.[i]?.name ?? a.name })),
               };
+              changed = true;
               continue;
             }
           }
           toAppend.push(serverMsg);
         }
 
+        if (!changed && toAppend.length === 0) return prev;
         return toAppend.length > 0 ? [...updated, ...toAppend] : updated;
       });
     }
@@ -314,14 +317,14 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
     const body = translatePreview ? translatePreview.text : draft.trim();
     setSending(true);
     const filesToSend = [...attachedFiles];
-    setAttachedFiles([]);
 
     // Build optimistic attachment previews synchronously using object URLs
-    const optimisticAttachments: MessageAttachment[] = filesToSend.map((file) => ({
-      name: file.name,
-      url: URL.createObjectURL(file),
-      contentType: file.type || "application/octet-stream",
-    }));
+    const blobUrls: string[] = [];
+    const optimisticAttachments: MessageAttachment[] = filesToSend.map((file) => {
+      const url = URL.createObjectURL(file);
+      blobUrls.push(url);
+      return { name: file.name, url, contentType: file.type || "application/octet-stream" };
+    });
 
     const optimistic: Message = {
       id: `opt-${Date.now()}`,
@@ -333,6 +336,7 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
       ...(optimisticAttachments.length > 0 && { attachments: optimisticAttachments }),
     };
     setLocalMessages((prev) => [...prev, optimistic]);
+    setAttachedFiles([]);
     setDraft(""); setToneCheck(null); setTranslatePreview(null);
     try {
       const attachments = filesToSend.length
@@ -344,11 +348,15 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
           })))
         : undefined;
       await api.conversations.reply(conversation.id, body, "comment", attachments);
+      // Revoke blob URLs now that the server has the real Cloudinary URLs via SSE
+      blobUrls.forEach((u) => URL.revokeObjectURL(u));
       toast.success(translatePreview ? `Reply sent in ${LANG_LABELS[translatePreview.lang]}.` : `Reply sent to ${conversation.customer.name}.`);
     } catch (err: any) {
       toast.error(`Failed to send reply: ${err.message}`);
       setLocalMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
+      blobUrls.forEach((u) => URL.revokeObjectURL(u));
       setDraft(body);
+      setAttachedFiles(filesToSend);
     } finally {
       setSending(false);
     }

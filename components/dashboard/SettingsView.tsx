@@ -149,10 +149,10 @@ function MetaDetails({ log }: { log: AuditLogRow }) {
     summary = m?.macroName ? `Macro: ${m.macroName}` : "Macro applied";
   } else if (log.action === "CONVERSATION_REPLY") {
     icon = <MessageSquare className="h-3 w-3 shrink-0 text-muted-foreground" />;
-    summary = m?.snippet ? `"${m.snippet}${m.snippet.length >= 120 ? "…" : ""}"` : "";
+    summary = m?.snippet ? `"${m.snippet.slice(0, 120)}${m.snippet.length >= 120 ? "…" : ""}"` : "";
   } else if (log.action === "NOTE_ADDED") {
     icon = <StickyNote className="h-3 w-3 shrink-0 text-muted-foreground" />;
-    summary = m?.snippet ? `"${m.snippet}${m.snippet.length >= 120 ? "…" : ""}"` : "";
+    summary = m?.snippet ? `"${m.snippet.slice(0, 120)}${m.snippet.length >= 120 ? "…" : ""}"` : "";
   }
 
   if (!summary && !isConvAction) return <span className="text-muted-foreground">—</span>;
@@ -167,9 +167,9 @@ function MetaDetails({ log }: { log: AuditLogRow }) {
       )}
       {isConvAction && (
         <a
-          href={`/inbox/${log.targetId}${
-            m?.partId ? `?msg=${m.partId}` :
-            m?.partIds?.[0] ? `?msg=${m.partIds[0]}` : ''
+          href={`/inbox/${encodeURIComponent(log.targetId)}${
+            m?.partId ? `?msg=${encodeURIComponent(m.partId)}` :
+            m?.partIds?.[0] ? `?msg=${encodeURIComponent(m.partIds[0])}` : ''
           }`}
           className="inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
         >

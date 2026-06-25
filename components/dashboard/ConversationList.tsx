@@ -214,7 +214,7 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
       }
     });
     return list;
-  }, [conversations, tab, q, sort, tierFilter, tagFilter, unhealthyOnly]);
+  }, [conversations, tab, q, sort, tierFilter, tagFilter, unhealthyOnly, apiResults, matchesQuery]);
 
   // Keep filteredRef in sync so the keyboard handler sees the latest visible list
   filteredRef.current = filtered;
