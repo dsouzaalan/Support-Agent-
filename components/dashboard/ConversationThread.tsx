@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
-import type { Conversation, ConvStatus, Message } from "@/lib/mock-data";
+import type { Conversation, ConvStatus, Message, MessageAttachment } from "@/lib/mock-data";
 import { suggestedMcp, getMcpResponse } from "@/lib/mock-data";
 import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
@@ -144,17 +144,57 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
 
   // Track which target we've already scrolled to so SSE message updates don't re-trigger it.
   const scrolledForRef = useRef<string | undefined>(undefined);
+  // Detect conversation switches vs same-conversation SSE updates.
+  const prevConvIdRef = useRef(conversation.id);
 
   useEffect(() => {
-    setDraft(""); setToneCheck(null); setTranslatePreview(null);
-    setShowTranslated({}); setMcpResult(null); setLocalMessages(conversation.messages);
-    setConvTags(conversation.tags ?? []);
-    setAttachedFiles([]);
-    // Reset scroll guard when switching conversations.
-    scrolledForRef.current = undefined;
-    // Only auto-scroll to bottom when there's no deep-link target.
-    if (!highlightMessageId && !searchQuery?.trim()) {
-      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+    const isSwitch = prevConvIdRef.current !== conversation.id;
+    prevConvIdRef.current = conversation.id;
+
+    if (isSwitch) {
+      // Switching to a new conversation — full reset.
+      setDraft(""); setToneCheck(null); setTranslatePreview(null);
+      setShowTranslated({}); setMcpResult(null);
+      setConvTags(conversation.tags ?? []);
+      setAttachedFiles([]);
+      scrolledForRef.current = undefined;
+      setLocalMessages(conversation.messages);
+      if (!highlightMessageId && !searchQuery?.trim()) {
+        scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+      }
+    } else {
+      // SSE update on the same conversation.
+      setLocalMessages((prev) => {
+        const prevIds = new Set(prev.map((m) => m.id));
+        const incoming = conversation.messages.filter((m) => !prevIds.has(m.id));
+        if (incoming.length === 0) return prev;
+
+        let updated = [...prev];
+        const toAppend: Message[] = [];
+
+        for (const serverMsg of incoming) {
+          // Agent messages from the server are confirmations of our optimistic messages.
+          // Replace the earliest pending optimistic message to avoid duplication.
+          if (serverMsg.from === "agent") {
+            const optIdx = updated.findIndex((m) => m.id.startsWith("opt-"));
+            if (optIdx !== -1) {
+              const opt = updated[optIdx];
+              // Use server message but preserve the original attachment names.
+              updated[optIdx] = {
+                ...serverMsg,
+                attachments: serverMsg.attachments?.map((a, i) => ({
+                  ...a,
+                  name: opt.attachments?.[i]?.name ?? a.name,
+                })),
+              };
+              continue;
+            }
+          }
+          toAppend.push(serverMsg);
+        }
+
+        return toAppend.length > 0 ? [...updated, ...toAppend] : updated;
+      });
     }
   }, [conversation.id, conversation.messages]);
 
@@ -273,7 +313,16 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
     if ((!draft.trim() && !attachedFiles.length) || sending) return;
     const body = translatePreview ? translatePreview.text : draft.trim();
     setSending(true);
-    // Optimistic update
+    const filesToSend = [...attachedFiles];
+    setAttachedFiles([]);
+
+    // Build optimistic attachment previews synchronously using object URLs
+    const optimisticAttachments: MessageAttachment[] = filesToSend.map((file) => ({
+      name: file.name,
+      url: URL.createObjectURL(file),
+      contentType: file.type || "application/octet-stream",
+    }));
+
     const optimistic: Message = {
       id: `opt-${Date.now()}`,
       from: "agent",
@@ -281,11 +330,10 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
       time: new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }),
       read: true,
       author: user ? `${user.firstName} ${user.lastName ?? ""}`.trim() : "Agent",
+      ...(optimisticAttachments.length > 0 && { attachments: optimisticAttachments }),
     };
     setLocalMessages((prev) => [...prev, optimistic]);
     setDraft(""); setToneCheck(null); setTranslatePreview(null);
-    const filesToSend = [...attachedFiles];
-    setAttachedFiles([]);
     try {
       const attachments = filesToSend.length
         ? await Promise.all(filesToSend.map((file) => new Promise<{ filename: string; mimeType: string; base64: string }>((resolve, reject) => {
@@ -1201,7 +1249,36 @@ Conversation link: https://support.zapmail.internal/inbox/${conv.id}`;
 
 // ─── Inline attachment rendering ─────────────────────────────────────────────
 
-import type { MessageAttachment } from "@/lib/mock-data";
+function AttachmentImage({ a }: { a: MessageAttachment }) {
+  const [loaded, setLoaded] = useState(false);
+  const [errored, setErrored] = useState(false);
+  const isBlob = a.url.startsWith("blob:");
+  return (
+    <a href={isBlob ? undefined : a.url} target={isBlob ? undefined : "_blank"} rel="noreferrer" className="block">
+      {/* Shimmer placeholder shown while remote URL loads; hidden immediately for blob (already in memory) */}
+      {!loaded && !errored && !isBlob && (
+        <div className="h-40 w-64 max-w-full animate-pulse rounded-lg bg-muted" />
+      )}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={a.url}
+        alt={a.name}
+        className={cn(
+          "max-h-64 max-w-full rounded-lg object-contain transition-opacity",
+          loaded || isBlob ? "opacity-100" : "opacity-0 absolute"
+        )}
+        style={{ maxWidth: "min(320px, 100%)" }}
+        onLoad={() => setLoaded(true)}
+        onError={() => setErrored(true)}
+      />
+      {errored && (
+        <div className="flex h-16 w-40 items-center justify-center rounded-lg bg-muted text-xs text-muted-foreground">
+          Image unavailable
+        </div>
+      )}
+    </a>
+  );
+}
 
 function MessageAttachments({ attachments, isAgent }: { attachments?: MessageAttachment[]; isAgent: boolean }) {
   if (!attachments?.length) return null;
@@ -1210,17 +1287,7 @@ function MessageAttachments({ attachments, isAgent }: { attachments?: MessageAtt
       {attachments.map((a, i) => {
         const ct = a.contentType || "";
         if (ct.startsWith("image/")) {
-          return (
-            <a key={i} href={a.url} target="_blank" rel="noreferrer" className="block">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={a.url}
-                alt={a.name}
-                className="max-h-64 max-w-full rounded-lg object-contain"
-                style={{ maxWidth: "min(320px, 100%)" }}
-              />
-            </a>
-          );
+          return <AttachmentImage key={i} a={a} />;
         }
         if (ct.startsWith("video/")) {
           return (
