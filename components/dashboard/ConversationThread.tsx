@@ -44,6 +44,25 @@ function nameInitials(name: string): string {
   return name.split(/\s+/).filter(Boolean).map((w) => w[0]).join("").toUpperCase().slice(0, 2);
 }
 
+const TAG_PALETTE = [
+  { bg: "bg-violet-100 dark:bg-violet-900/40", text: "text-violet-700 dark:text-violet-300", dot: "bg-violet-500" },
+  { bg: "bg-blue-100 dark:bg-blue-900/40",     text: "text-blue-700 dark:text-blue-300",     dot: "bg-blue-500" },
+  { bg: "bg-emerald-100 dark:bg-emerald-900/40", text: "text-emerald-700 dark:text-emerald-300", dot: "bg-emerald-500" },
+  { bg: "bg-amber-100 dark:bg-amber-900/40",   text: "text-amber-700 dark:text-amber-300",   dot: "bg-amber-500" },
+  { bg: "bg-pink-100 dark:bg-pink-900/40",     text: "text-pink-700 dark:text-pink-300",     dot: "bg-pink-500" },
+  { bg: "bg-orange-100 dark:bg-orange-900/40", text: "text-orange-700 dark:text-orange-300", dot: "bg-orange-500" },
+  { bg: "bg-teal-100 dark:bg-teal-900/40",     text: "text-teal-700 dark:text-teal-300",     dot: "bg-teal-500" },
+  { bg: "bg-red-100 dark:bg-red-900/40",       text: "text-red-700 dark:text-red-300",       dot: "bg-red-500" },
+  { bg: "bg-indigo-100 dark:bg-indigo-900/40", text: "text-indigo-700 dark:text-indigo-300", dot: "bg-indigo-500" },
+  { bg: "bg-cyan-100 dark:bg-cyan-900/40",     text: "text-cyan-700 dark:text-cyan-300",     dot: "bg-cyan-500" },
+];
+
+function getTagColor(id: string) {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = ((h << 5) - h + id.charCodeAt(i)) | 0;
+  return TAG_PALETTE[Math.abs(h) % TAG_PALETTE.length];
+}
+
 const SNOOZE_OPTIONS = [
   { label: "1 hour",      getTime: () => Math.floor(Date.now() / 1000) + 3600 },
   { label: "4 hours",     getTime: () => Math.floor(Date.now() / 1000) + 14400 },
@@ -80,6 +99,7 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
   const [tagsLoading, setTagsLoading] = useState(false);
   const [newTagName, setNewTagName] = useState("");
   const [creatingTag, setCreatingTag] = useState(false);
+  const tagInputRef = useRef<HTMLInputElement>(null);
 
   // Macros (real API)
   const [macros, setMacros] = useState<{ id: string; name: string; description: string; actions: any[] }[]>([]);
@@ -484,71 +504,94 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
           </div>
           {/* Tags row */}
           <div className="mt-1.5 flex flex-wrap items-center gap-1">
-            {convTags.map((tag) => (
-              <span key={tag.id} className="inline-flex items-center gap-0.5 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
-                #{tag.name}
-                {can('tags:apply') && (
-                  <button onClick={() => handleRemoveTag(tag.id)} className="ml-0.5 rounded-full hover:text-danger focus:outline-none" aria-label={`Remove ${tag.name}`}>
+            {convTags.map((tag) => {
+              const color = getTagColor(tag.id);
+              return (
+                <span key={tag.id} className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold", color.bg, color.text)}>
+                  <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", color.dot)} />
+                  {tag.name}
+                  <button onClick={() => handleRemoveTag(tag.id)} className="ml-0.5 opacity-60 hover:opacity-100 focus:outline-none" aria-label={`Remove ${tag.name}`}>
                     <X className="h-2.5 w-2.5" />
                   </button>
-                )}
-              </span>
-            ))}
-            {can('tags:apply') && (
+                </span>
+              );
+            })}
             <div className="relative">
               <button
                 onClick={() => setShowTagPicker((v) => !v)}
-                className="inline-flex items-center gap-0.5 rounded-full border border-dashed border-border px-2 py-0.5 text-[10px] text-muted-foreground hover:border-primary/50 hover:text-primary"
+                className="inline-flex items-center gap-1 rounded-full border border-dashed border-border px-2 py-0.5 text-[10px] font-medium text-muted-foreground hover:border-primary/50 hover:text-primary transition-colors"
                 title="Add tag"
               >
-                <Plus className="h-2.5 w-2.5" /> Tag
+                <Plus className="h-3 w-3" /> Tag
               </button>
               {showTagPicker && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => { setShowTagPicker(false); setNewTagName(""); }} />
-                  <div className="absolute left-0 top-full z-50 mt-1 w-48 rounded-lg border border-border bg-card shadow-lg">
-                    <div className="px-2 py-1.5 text-[10px] font-semibold uppercase text-muted-foreground">Add tag</div>
-                    <div className="max-h-40 overflow-y-auto pb-1">
-                      {allTags.filter((t) => !convTags.some((ct) => ct.id === t.id)).map((tag) => (
-                        <button
-                          key={tag.id}
-                          onClick={() => handleAddTag(tag)}
-                          className="block w-full px-3 py-1 text-left text-xs hover:bg-muted"
-                        >
-                          #{tag.name}
-                        </button>
-                      ))}
-                      {allTags.filter((t) => !convTags.some((ct) => ct.id === t.id)).length === 0 && (
-                        <div className="px-3 pb-1 text-[11px] text-muted-foreground">No existing tags</div>
+                  <div className="absolute left-0 top-full z-50 mt-1 w-56 rounded-xl border border-border bg-card shadow-xl">
+                    {/* Search input */}
+                    <div className="px-2 pt-2 pb-1">
+                      <input
+                        ref={tagInputRef}
+                        autoFocus
+                        value={newTagName}
+                        onChange={(e) => setNewTagName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            const exact = allTags.find((t) => t.name.toLowerCase() === newTagName.trim().toLowerCase());
+                            if (exact) handleAddTag(exact);
+                            else if (newTagName.trim()) handleCreateTag();
+                          }
+                          e.stopPropagation();
+                        }}
+                        placeholder="Search tags…"
+                        className="w-full rounded-lg border border-border bg-muted/50 px-2.5 py-1.5 text-xs focus:border-primary/50 focus:outline-none"
+                      />
+                    </div>
+                    {/* Tag list */}
+                    <div className="max-h-48 overflow-y-auto py-1">
+                      {allTags
+                        .filter((t) => t.name.toLowerCase().includes(newTagName.trim().toLowerCase()))
+                        .map((tag) => {
+                          const applied = convTags.some((ct) => ct.id === tag.id);
+                          const color = getTagColor(tag.id);
+                          return (
+                            <button
+                              key={tag.id}
+                              onClick={() => applied ? handleRemoveTag(tag.id) : handleAddTag(tag)}
+                              className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs hover:bg-muted transition-colors"
+                            >
+                              <span className={cn("flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border transition-colors", applied ? "border-primary bg-primary text-primary-foreground" : "border-border")}>
+                                {applied && <span className="text-[9px] font-bold leading-none">✓</span>}
+                              </span>
+                              <span className={cn("flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-semibold", color.bg, color.text)}>
+                                <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", color.dot)} />
+                                {tag.name}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      {allTags.filter((t) => t.name.toLowerCase().includes(newTagName.trim().toLowerCase())).length === 0 && !newTagName.trim() && (
+                        <div className="px-3 py-2 text-[11px] text-muted-foreground">No tags yet</div>
                       )}
                     </div>
-                    {can('tags:manage') && (
+                    {/* Create row — only shown when typed text doesn't match any existing tag */}
+                    {newTagName.trim() && !allTags.some((t) => t.name.toLowerCase() === newTagName.trim().toLowerCase()) && (
                       <div className="border-t border-border px-2 py-1.5">
-                        <div className="mb-1 text-[10px] font-semibold uppercase text-muted-foreground">Create new</div>
-                        <div className="flex gap-1">
-                          <input
-                            autoFocus
-                            value={newTagName}
-                            onChange={(e) => setNewTagName(e.target.value)}
-                            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleCreateTag(); } e.stopPropagation(); }}
-                            placeholder="Tag name…"
-                            className="min-w-0 flex-1 rounded border border-border bg-background px-2 py-1 text-xs focus:border-primary/50 focus:outline-none"
-                          />
-                          <button
-                            onClick={handleCreateTag}
-                            disabled={!newTagName.trim() || creatingTag}
-                            className="rounded bg-primary px-2 py-1 text-[10px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-                          >
-                            {creatingTag ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
-                          </button>
-                        </div>
+                        <button
+                          onClick={handleCreateTag}
+                          disabled={creatingTag}
+                          className="flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium text-primary hover:bg-primary/8 disabled:opacity-50 transition-colors"
+                        >
+                          {creatingTag ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+                          Create &ldquo;{newTagName.trim()}&rdquo;
+                        </button>
                       </div>
                     )}
                   </div>
                 </>
               )}
             </div>
-            )}
           </div>
         </div>
         <div className="flex items-center gap-1">

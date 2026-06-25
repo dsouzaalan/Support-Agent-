@@ -25,6 +25,24 @@ const SORTS: { id: Sort; label: string }[] = [
 const TIER_ORDER: Record<TierType, number> = { Platinum: 0, Gold: 1, Silver: 2, New: 3 };
 const SENTIMENT_ORDER = { negative: 0, neutral: 1, positive: 2 } as const;
 
+const TAG_PALETTE = [
+  { bg: "bg-violet-100 dark:bg-violet-900/40", text: "text-violet-700 dark:text-violet-300", dot: "bg-violet-500" },
+  { bg: "bg-blue-100 dark:bg-blue-900/40",     text: "text-blue-700 dark:text-blue-300",     dot: "bg-blue-500" },
+  { bg: "bg-emerald-100 dark:bg-emerald-900/40", text: "text-emerald-700 dark:text-emerald-300", dot: "bg-emerald-500" },
+  { bg: "bg-amber-100 dark:bg-amber-900/40",   text: "text-amber-700 dark:text-amber-300",   dot: "bg-amber-500" },
+  { bg: "bg-pink-100 dark:bg-pink-900/40",     text: "text-pink-700 dark:text-pink-300",     dot: "bg-pink-500" },
+  { bg: "bg-orange-100 dark:bg-orange-900/40", text: "text-orange-700 dark:text-orange-300", dot: "bg-orange-500" },
+  { bg: "bg-teal-100 dark:bg-teal-900/40",     text: "text-teal-700 dark:text-teal-300",     dot: "bg-teal-500" },
+  { bg: "bg-red-100 dark:bg-red-900/40",       text: "text-red-700 dark:text-red-300",       dot: "bg-red-500" },
+  { bg: "bg-indigo-100 dark:bg-indigo-900/40", text: "text-indigo-700 dark:text-indigo-300", dot: "bg-indigo-500" },
+  { bg: "bg-cyan-100 dark:bg-cyan-900/40",     text: "text-cyan-700 dark:text-cyan-300",     dot: "bg-cyan-500" },
+];
+function getTagColor(key: string) {
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = ((h << 5) - h + key.charCodeAt(i)) | 0;
+  return TAG_PALETTE[Math.abs(h) % TAG_PALETTE.length];
+}
+
 interface Props {
   conversations: Conversation[];
   selectedId: string;
@@ -253,7 +271,7 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
             { value: "Platinum", label: "Platinum" }, { value: "Gold", label: "Gold" },
             { value: "Silver", label: "Silver" }, { value: "New", label: "New" },
           ]} />
-          <SelectFilter value={tagFilter} onChange={setTagFilter} options={[{ value: "all", label: "All tags" }, ...allTags.map((t) => ({ value: t, label: `#${t}` }))]} />
+          <SelectFilter value={tagFilter} onChange={setTagFilter} options={[{ value: "all", label: "All tags" }, ...allTags.map((t) => ({ value: t, label: t }))]} />
           <button onClick={() => setUnhealthyOnly(!unhealthyOnly)}
             className={cn("rounded-md border px-1.5 py-0.5 text-[10px] font-medium",
               unhealthyOnly ? "border-danger/40 bg-danger/10 text-danger" : "border-border text-muted-foreground hover:bg-muted")}>
@@ -426,19 +444,29 @@ function ConvRow({ c, selected, onSelect, clickupTicket, searchQuery }: { c: Con
         })()}
         {visibleTags.length > 0 && (
           <div className="mt-1.5 flex items-center gap-1">
-            {visibleTags.map((t) => (
-              <span key={t} className="rounded-sm bg-muted/70 px-1 py-0 text-[9px] text-muted-foreground/80">#{t}</span>
-            ))}
+            {visibleTags.map((t) => {
+              const color = getTagColor(t);
+              return (
+                <span key={t} className={cn("inline-flex items-center gap-1 rounded-full px-1.5 py-0 text-[9px] font-semibold", color.bg, color.text)}>
+                  <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", color.dot)} />{t}
+                </span>
+              );
+            })}
             {extraTags > 0 && (
-              <span className="rounded-sm bg-muted/70 px-1 py-0 text-[9px] text-muted-foreground/80">+{extraTags}</span>
+              <span className="rounded-full bg-muted/70 px-1.5 py-0 text-[9px] text-muted-foreground/80">+{extraTags}</span>
             )}
           </div>
         )}
         {c.tags && c.tags.length > 0 && (
           <div className="mt-1 flex flex-wrap items-center gap-1">
-            {c.tags.map((t) => (
-              <span key={t.id} className="rounded-full bg-primary/10 px-1.5 py-0 text-[9px] font-medium text-primary">#{t.name}</span>
-            ))}
+            {c.tags.map((t) => {
+              const color = getTagColor(t.id);
+              return (
+                <span key={t.id} className={cn("inline-flex items-center gap-1 rounded-full px-1.5 py-0 text-[9px] font-semibold", color.bg, color.text)}>
+                  <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", color.dot)} />{t.name}
+                </span>
+              );
+            })}
           </div>
         )}
       </div>
