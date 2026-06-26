@@ -10,9 +10,9 @@ import {
   Plus, Trash2, Pencil, X, ChevronDown, ChevronUp,
   Shield, Loader2, ExternalLink, UserCheck, UserX,
   MessageSquare, StickyNote, Tag, UserCog, ClipboardList,
+  Clock, Globe, Webhook, AlertTriangle,
 } from "lucide-react";
 import { toast } from "sonner";
-import { slackAlerts, slackSettings as initialSlack } from "@/lib/mock-data";
 import type { AgentRole } from "@/contexts/AuthContext";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -167,58 +167,382 @@ export function AdminSettingsView({ onOpenConversation }: { onOpenConversation: 
 
 // ─── Alerts tab ───────────────────────────────────────────────────────────────
 
+const TIMEZONES = [
+  "UTC",
+  "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
+  "America/Anchorage", "America/Honolulu", "America/Sao_Paulo", "America/Toronto",
+  "America/Vancouver", "America/Mexico_City", "America/Bogota", "America/Santiago",
+  "Europe/London", "Europe/Paris", "Europe/Berlin", "Europe/Amsterdam",
+  "Europe/Madrid", "Europe/Rome", "Europe/Stockholm", "Europe/Moscow",
+  "Europe/Istanbul", "Africa/Cairo", "Africa/Johannesburg", "Africa/Lagos",
+  "Asia/Dubai", "Asia/Karachi", "Asia/Kolkata", "Asia/Colombo",
+  "Asia/Dhaka", "Asia/Bangkok", "Asia/Singapore", "Asia/Hong_Kong",
+  "Asia/Shanghai", "Asia/Tokyo", "Asia/Seoul", "Australia/Sydney",
+  "Australia/Melbourne", "Australia/Perth", "Pacific/Auckland",
+];
+
+const DAYS = [
+  { label: "Mon", value: 1 }, { label: "Tue", value: 2 }, { label: "Wed", value: 3 },
+  { label: "Thu", value: 4 }, { label: "Fri", value: 5 }, { label: "Sat", value: 6 },
+  { label: "Sun", value: 0 },
+];
+
+const ALERT_TYPE_LABELS: Record<string, string> = {
+  sla_breach:          "SLA Breach",
+  sentiment_negative:  "Negative Sentiment",
+  churn_high:          "High Churn Risk",
+  chargeback_keyword:  "Chargeback Keyword",
+};
+
+const TIER_EMOJI: Record<string, string> = {
+  Platinum: "💎", Gold: "🥇", Silver: "🥈", New: "🆕",
+};
+
+function relativeTime(date: string | Date): string {
+  const diff = Math.floor((Date.now() - new Date(date).getTime()) / 1000);
+  if (diff < 60)   return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+}
+
 function AlertsTab({ onOpenConversation }: { onOpenConversation: (id: string) => void }) {
-  const [s, setS] = useState(initialSlack);
+  const [loading, setLoading] = useState(true);
+
+  // Slack
+  const [channel, setChannel]         = useState("");
+  const [savingSlack, setSavingSlack] = useState(false);
+
+  // Alert toggles
+  const [alertSla,         setAlertSla]         = useState(true);
+  const [alertSentiment,   setAlertSentiment]   = useState(false);
+  const [alertChurn,       setAlertChurn]       = useState(false);
+  const [alertChargeback,  setAlertChargeback]  = useState(false);
+  const [savingToggles,    setSavingToggles]    = useState(false);
+
+  // SLA thresholds
+  const [platinum, setPlatinum] = useState(15);
+  const [gold,     setGold]     = useState(15);
+  const [silver,   setSilver]   = useState(30);
+  const [tierNew,  setTierNew]  = useState(60);
+  const [savingThresholds, setSavingThresholds] = useState(false);
+
+  // Working hours
+  const [workStart, setWorkStart] = useState("09:00");
+  const [workEnd,   setWorkEnd]   = useState("18:00");
+  const [workTz,    setWorkTz]    = useState("America/Los_Angeles");
+  const [workDays,  setWorkDays]  = useState<number[]>([1, 2, 3, 4, 5]);
+  const [savingHours, setSavingHours] = useState(false);
+
+  // Real alerts
+  const [recentAlerts,   setRecentAlerts]   = useState<any[]>([]);
+  const [alertsLoading,  setAlertsLoading]  = useState(true);
+
+  useEffect(() => {
+    api.settings.get()
+      .then((res) => {
+        const d = res.data ?? res;
+        setChannel(d.slackChannel ?? "");
+        setAlertSla(d.alertSlaEnabled ?? true);
+        setAlertSentiment(d.alertSentimentEnabled ?? false);
+        setAlertChurn(d.alertChurnEnabled ?? false);
+        setAlertChargeback(d.alertChargebackEnabled ?? false);
+        setPlatinum(d.slaThresholdPlatinum ?? 15);
+        setGold(d.slaThresholdGold ?? 15);
+        setSilver(d.slaThresholdSilver ?? 30);
+        setTierNew(d.slaThresholdNew ?? 60);
+        setWorkStart(d.workingHoursStart ?? "09:00");
+        setWorkEnd(d.workingHoursEnd ?? "18:00");
+        setWorkTz(d.workingHoursTimezone ?? "America/Los_Angeles");
+        setWorkDays(d.workingHoursDays ?? [1, 2, 3, 4, 5]);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+
+    api.alerts.list()
+      .then((res) => setRecentAlerts(res.data ?? []))
+      .catch(() => {})
+      .finally(() => setAlertsLoading(false));
+  }, []);
+
+  const saveSlack = async () => {
+    setSavingSlack(true);
+    try {
+      await api.settings.update({ slackChannel: channel || null });
+      toast.success("Slack settings saved");
+    } catch (e: any) { toast.error(e.message); }
+    finally { setSavingSlack(false); }
+  };
+
+  const saveToggles = async (patch: Record<string, boolean>) => {
+    setSavingToggles(true);
+    try {
+      await api.settings.update(patch);
+    } catch (e: any) { toast.error(e.message); }
+    finally { setSavingToggles(false); }
+  };
+
+  const saveThresholds = async () => {
+    setSavingThresholds(true);
+    try {
+      await api.settings.update({
+        slaThresholdPlatinum: platinum,
+        slaThresholdGold:     gold,
+        slaThresholdSilver:   silver,
+        slaThresholdNew:      tierNew,
+      });
+      toast.success("SLA thresholds saved");
+    } catch (e: any) { toast.error(e.message); }
+    finally { setSavingThresholds(false); }
+  };
+
+  const saveHours = async () => {
+    setSavingHours(true);
+    try {
+      await api.settings.update({
+        workingHoursStart:    workStart,
+        workingHoursEnd:      workEnd,
+        workingHoursTimezone: workTz,
+        workingHoursDays:     workDays,
+      });
+      toast.success("Working hours saved");
+    } catch (e: any) { toast.error(e.message); }
+    finally { setSavingHours(false); }
+  };
+
+  const toggleDay = (day: number) => {
+    setWorkDays((prev) =>
+      prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]
+    );
+  };
+
+  if (loading) return <TabLoader />;
+
   return (
-    <div className="mx-auto w-full max-w-3xl px-4 py-5 sm:px-6 sm:py-6">
+    <div className="mx-auto w-full max-w-3xl px-4 py-5 sm:px-6 sm:py-6 space-y-4">
+
+      {/* Slack */}
       <section className="rounded-lg border border-border bg-card p-4 sm:p-5">
-        <h2 className="mb-1 text-sm font-semibold">Slack channel</h2>
-        <p className="mb-3 text-xs text-muted-foreground">Where Slack alerts get posted.</p>
-        <div className="flex items-center gap-2 rounded-md border border-border bg-background px-3 py-2">
-          <Hash className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-          <input value={s.channel} onChange={(e) => setS({ ...s, channel: e.target.value })}
-            className="min-w-0 flex-1 bg-transparent text-sm focus:outline-none" />
-          <button onClick={() => toast.success("Channel updated")} className="rounded bg-primary px-2 py-1 text-xs font-medium text-primary-foreground">Save</button>
+        <div className="mb-3 flex items-center gap-2">
+          <Webhook className="h-3.5 w-3.5 text-primary" />
+          <h2 className="text-sm font-semibold">Slack integration</h2>
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-medium text-muted-foreground">Channel</label>
+          <div className="flex items-center gap-2 rounded-md border border-border bg-background px-3 py-2">
+            <Hash className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <input
+              value={channel}
+              onChange={(e) => setChannel(e.target.value)}
+              placeholder="zapmail-alerts"
+              className="min-w-0 flex-1 bg-transparent text-sm focus:outline-none"
+            />
+          </div>
+        </div>
+        <div className="mt-3 flex justify-end">
+          <button
+            onClick={saveSlack}
+            disabled={savingSlack}
+            className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          >
+            {savingSlack && <Loader2 className="h-3 w-3 animate-spin" />}
+            Save
+          </button>
         </div>
       </section>
-      <section className="mt-4 rounded-lg border border-border bg-card p-4 sm:mt-5 sm:p-5">
-        <h2 className="mb-1 text-sm font-semibold">Alert triggers</h2>
-        <p className="mb-3 text-xs text-muted-foreground">When an alert fires to Slack.</p>
-        <Toggle label="Sentiment turns strongly negative" v={s.thresholds.negativeSentiment} onChange={(v) => setS({ ...s, thresholds: { ...s.thresholds, negativeSentiment: v } })} />
-        <Toggle label="Churn risk flips to High" v={s.thresholds.churnHigh} onChange={(v) => setS({ ...s, thresholds: { ...s.thresholds, churnHigh: v } })} />
-        <Toggle label="Chargeback / dispute / legal keywords detected" v={s.thresholds.chargebackKeywords} onChange={(v) => setS({ ...s, thresholds: { ...s.thresholds, chargebackKeywords: v } })} />
-        <div className="mt-3 flex items-center justify-between border-t border-border pt-3 text-xs">
-          <span className="mr-3">SLA breach threshold for Platinum / Gold (minutes)</span>
-          <input type="number" value={s.thresholds.slaBreachVipMinutes}
-            onChange={(e) => setS({ ...s, thresholds: { ...s.thresholds, slaBreachVipMinutes: Number(e.target.value) } })}
-            className="w-16 rounded border border-border bg-background px-2 py-1 text-right focus:outline-none" />
+
+      {/* Alert toggles */}
+      <section className="rounded-lg border border-border bg-card p-4 sm:p-5">
+        <div className="mb-1 flex items-center gap-2">
+          <Bell className="h-3.5 w-3.5 text-primary" />
+          <h2 className="text-sm font-semibold">Alert triggers</h2>
+        </div>
+        <p className="mb-3 text-xs text-muted-foreground">Choose which events fire a Slack alert.</p>
+        {savingToggles && <span className="mb-2 block text-[10px] text-muted-foreground">Saving…</span>}
+        <Toggle
+          label="SLA breach"
+          v={alertSla}
+          onChange={(v) => { setAlertSla(v); saveToggles({ alertSlaEnabled: v }); }}
+        />
+        <Toggle
+          label="Sentiment turns strongly negative"
+          v={alertSentiment}
+          onChange={(v) => { setAlertSentiment(v); saveToggles({ alertSentimentEnabled: v }); }}
+        />
+        <Toggle
+          label="Churn risk flips to High"
+          v={alertChurn}
+          onChange={(v) => { setAlertChurn(v); saveToggles({ alertChurnEnabled: v }); }}
+        />
+        <Toggle
+          label="Chargeback / dispute / legal keywords detected"
+          v={alertChargeback}
+          onChange={(v) => { setAlertChargeback(v); saveToggles({ alertChargebackEnabled: v }); }}
+        />
+      </section>
+
+      {/* SLA thresholds */}
+      <section className="rounded-lg border border-border bg-card p-4 sm:p-5">
+        <div className="mb-1 flex items-center gap-2">
+          <AlertTriangle className="h-3.5 w-3.5 text-primary" />
+          <h2 className="text-sm font-semibold">SLA thresholds</h2>
+        </div>
+        <p className="mb-3 text-xs text-muted-foreground">
+          Working-hours minutes before an SLA breach alert fires, per customer tier.
+        </p>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {[
+            { label: "Platinum 💎", value: platinum, set: setPlatinum },
+            { label: "Gold 🥇",     value: gold,     set: setGold },
+            { label: "Silver 🥈",   value: silver,   set: setSilver },
+            { label: "New 🆕",      value: tierNew,  set: setTierNew },
+          ].map(({ label, value, set }) => (
+            <div key={label}>
+              <label className="mb-1 block text-[11px] font-medium text-muted-foreground">{label}</label>
+              <div className="flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1.5">
+                <input
+                  type="number"
+                  min={1}
+                  value={value}
+                  onChange={(e) => set(Math.max(1, Number(e.target.value)))}
+                  className="w-full bg-transparent text-sm tabular-nums focus:outline-none"
+                />
+                <span className="shrink-0 text-xs text-muted-foreground">min</span>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="mt-3 flex justify-end">
+          <button
+            onClick={saveThresholds}
+            disabled={savingThresholds}
+            className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          >
+            {savingThresholds && <Loader2 className="h-3 w-3 animate-spin" />}
+            Save
+          </button>
         </div>
       </section>
-      <section className="mt-4 rounded-lg border border-border bg-card p-4 sm:mt-5 sm:p-5">
+
+      {/* Working hours */}
+      <section className="rounded-lg border border-border bg-card p-4 sm:p-5">
+        <div className="mb-1 flex items-center gap-2">
+          <Clock className="h-3.5 w-3.5 text-primary" />
+          <h2 className="text-sm font-semibold">Working hours</h2>
+        </div>
+        <p className="mb-3 text-xs text-muted-foreground">
+          SLA timers only count minutes that fall within these hours.
+        </p>
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Start time</label>
+              <input
+                type="time"
+                value={workStart}
+                onChange={(e) => setWorkStart(e.target.value)}
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:border-primary/50 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">End time</label>
+              <input
+                type="time"
+                value={workEnd}
+                onChange={(e) => setWorkEnd(e.target.value)}
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:border-primary/50 focus:outline-none"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+              <Globe className="h-3 w-3" /> Timezone
+            </label>
+            <select
+              value={workTz}
+              onChange={(e) => setWorkTz(e.target.value)}
+              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:border-primary/50 focus:outline-none"
+            >
+              {TIMEZONES.map((tz) => (
+                <option key={tz} value={tz}>{tz}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="mb-2 block text-xs font-medium text-muted-foreground">Working days</label>
+            <div className="flex flex-wrap gap-1.5">
+              {DAYS.map(({ label, value }) => (
+                <button
+                  key={value}
+                  onClick={() => toggleDay(value)}
+                  className={cn(
+                    "rounded-md border px-3 py-1.5 text-xs font-medium transition",
+                    workDays.includes(value)
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className="mt-3 flex justify-end">
+          <button
+            onClick={saveHours}
+            disabled={savingHours}
+            className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          >
+            {savingHours && <Loader2 className="h-3 w-3 animate-spin" />}
+            Save
+          </button>
+        </div>
+      </section>
+
+      {/* Recent alerts */}
+      <section className="rounded-lg border border-border bg-card p-4 sm:p-5">
         <div className="mb-3 flex items-center gap-2">
           <Bell className="h-3.5 w-3.5 text-primary" />
           <h2 className="text-sm font-semibold">Recent alerts fired</h2>
         </div>
-        <div className="space-y-2">
-          {slackAlerts.map((a) => (
-            <div key={a.id} className="rounded-md border border-border bg-background p-3 text-xs">
-              <div className="mb-1 flex flex-wrap items-center justify-between gap-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-semibold">{a.customer}</span>
-                  <span className="rounded bg-muted px-1.5 py-0 text-[9px] font-semibold uppercase">{a.tier}</span>
-                  <span className="text-muted-foreground">· {a.reason}</span>
+        {alertsLoading ? (
+          <div className="flex items-center gap-1.5 py-4 text-xs text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading…
+          </div>
+        ) : recentAlerts.length === 0 ? (
+          <p className="py-4 text-center text-sm text-muted-foreground">No alerts fired yet.</p>
+        ) : (
+          <div className="space-y-2">
+            {recentAlerts.map((a: any) => (
+              <div key={a.id} className="rounded-md border border-border bg-background p-3 text-xs">
+                <div className="mb-1 flex flex-wrap items-center justify-between gap-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-semibold">{a.customerName}</span>
+                    <span className="rounded bg-muted px-1.5 py-0 text-[9px] font-semibold uppercase">
+                      {TIER_EMOJI[a.customerTier] ?? ""} {a.customerTier}
+                    </span>
+                    <span className="text-muted-foreground">
+                      · {ALERT_TYPE_LABELS[a.alertType] ?? a.alertType}
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-muted-foreground">{relativeTime(a.firedAt)}</span>
                 </div>
-                <span className="text-[10px] text-muted-foreground">{a.when}</span>
+                {a.messageSnippet && (
+                  <p className="mb-1.5 italic text-muted-foreground">&ldquo;{a.messageSnippet}&rdquo;</p>
+                )}
+                <button
+                  onClick={() => onOpenConversation(a.conversationId)}
+                  className="inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
+                >
+                  Open conversation <ExternalLink className="h-2.5 w-2.5" />
+                </button>
               </div>
-              <p className="italic text-muted-foreground">&ldquo;{a.snippet}&rdquo;</p>
-              <button onClick={() => onOpenConversation(a.conversationId)}
-                className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline">
-                Open conversation <ExternalLink className="h-2.5 w-2.5" />
-              </button>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </section>
+
     </div>
   );
 }

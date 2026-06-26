@@ -539,6 +539,22 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
               conversation.status === "open" && "bg-success/15 text-success",
               conversation.status === "pending" && "bg-warning/20 text-warning",
               conversation.status === "closed" && "bg-muted text-muted-foreground")}>{conversation.status}</span>
+            {conversation.sla?.firstReplyBreached && (
+              <span className="inline-flex animate-pulse items-center gap-1 rounded-full bg-danger/15 px-2 py-0.5 text-[10px] font-semibold text-danger">
+                <AlertTriangle className="h-3 w-3" />SLA Breached
+              </span>
+            )}
+            {!conversation.sla?.firstReplyBreached && conversation.sla?.remainingSeconds != null && conversation.sla.remainingSeconds > 0 && (
+              <span className={cn(
+                "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold",
+                conversation.sla.remainingSeconds < 300 ? "bg-danger/10 text-danger" : "bg-warning/15 text-warning"
+              )}>
+                <Clock className="h-3 w-3" />
+                {conversation.sla.remainingSeconds < 60
+                  ? `${conversation.sla.remainingSeconds}s`
+                  : `${Math.round(conversation.sla.remainingSeconds / 60)}m`} left
+              </span>
+            )}
             {clickupTicket && (
               <a href={clickupTaskUrl || `https://app.clickup.com/t/${clickupTicket}`} target="_blank" rel="noreferrer"
                 className="inline-flex items-center gap-1 rounded-md border border-primary/30 bg-primary/5 px-1.5 py-0.5 text-[10px] font-semibold text-primary hover:bg-primary/10">

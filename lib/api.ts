@@ -206,6 +206,16 @@ export const api = {
     },
   },
 
+  settings: {
+    get: () => apiFetch('/settings'),
+    update: (payload: Record<string, any>) =>
+      apiFetch('/settings', { method: 'PATCH', body: JSON.stringify(payload) }),
+  },
+
+  alerts: {
+    list: () => apiFetch('/alerts'),
+  },
+
   sseUrl: () => {
     const token = getToken();
     return `${API_BASE}/api/v1/events${token ? `?token=${encodeURIComponent(token)}` : ''}`;
