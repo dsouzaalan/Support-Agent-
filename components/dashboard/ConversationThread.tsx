@@ -11,7 +11,7 @@ import {
   Sparkles, SendHorizonal, Wand2, ExternalLink,
   AlertTriangle, CheckCheck, MoreHorizontal, UserPlus, Languages,
   BookOpen, FileText, Clock, Stethoscope, StickyNote, AtSign, CreditCard,
-  ClipboardList, RotateCcw, Keyboard, Paperclip, Tag, X, Plus, Loader2, BellOff,
+  ClipboardList, RotateCcw, Keyboard, Paperclip, Tag, X, Plus, Loader2, BellOff, LogIn,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -97,6 +97,7 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
   const [agentList, setAgentList] = useState<{ id: string; name: string }[]>([]);
   const [agentListLoading, setAgentListLoading] = useState(false);
   const [assigning, setAssigning] = useState(false);
+  const [loginLoading, setLoginLoading] = useState(false);
   const [localAssignedAgent, setLocalAssignedAgent] = useState(conversation.assignedAgent ?? null);
 
   // Tags
@@ -868,6 +869,26 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
               <CheckCheck className="h-4 w-4" />
             </IconBtn>
           ))}
+          {can('conversations:one_click_login') && (
+            <IconBtn
+              label="Login as Customer"
+              onClick={async () => {
+                if (loginLoading) return;
+                setLoginLoading(true);
+                try {
+                  const res = await api.conversations.oneClickLogin(conversation.id);
+                  window.open(res.data.url, '_blank', 'noopener,noreferrer');
+                  toast.success(`Opened session as ${res.data.customerEmail}`);
+                } catch (err: any) {
+                  toast.error(err.message || 'Failed to generate login link');
+                } finally {
+                  setLoginLoading(false);
+                }
+              }}
+            >
+              {loginLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}
+            </IconBtn>
+          )}
           <IconBtn label="More"><MoreHorizontal className="h-4 w-4" /></IconBtn>
         </div>
       </div>

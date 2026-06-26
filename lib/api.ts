@@ -121,6 +121,8 @@ export const api = {
     search: (q: string) => apiFetch(`/conversations/search?q=${encodeURIComponent(q)}`),
     assign: (id: string, agentId: string | null) =>
       apiFetch(`/conversations/${id}/assign`, { method: 'PATCH', body: JSON.stringify({ agentId }) }),
+    oneClickLogin: (id: string) =>
+      apiFetch(`/conversations/${id}/one-click-login`, { method: 'POST' }),
   },
 
   contacts: {
