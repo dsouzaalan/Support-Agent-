@@ -189,6 +189,27 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
   const [newArticleState, setNewArticleState] = useState<"published" | "draft">("published");
   const [creatingArticle, setCreatingArticle] = useState(false);
 
+  // One-click login
+  const [loginLoading, setLoginLoading] = useState(false);
+  const handleOneClickLogin = async () => {
+    if (loginLoading) return;
+    setLoginLoading(true);
+    try {
+      const res = await api.conversations.oneClickLogin(conversation.id);
+      const { url, customerEmail } = res.data;
+      const popup = window.open(url, '_blank', 'noopener,noreferrer');
+      if (!popup) {
+        toast.error('Popup blocked — allow popups for this site, then try again.');
+      } else {
+        toast.success(`Customer login opened for ${customerEmail}`);
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to open login link');
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
   // File attachments — stored as File objects, converted to base64 only on send
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1837,7 +1858,14 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
 
         {/* Quick actions */}
         <div className="mt-3 flex flex-wrap gap-1.5">
-          <QuickAction icon={<ExternalLink className="h-3 w-3" />} onClick={() => toast.success("One-click login token issued (15-min). Logged.")}>One-Click Login</QuickAction>
+          {can('conversations:one_click_login') && (
+            <QuickAction
+              icon={loginLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <ExternalLink className="h-3 w-3" />}
+              onClick={handleOneClickLogin}
+            >
+              {loginLoading ? 'Opening…' : 'One-Click Login'}
+            </QuickAction>
+          )}
           <QuickAction icon={<CreditCard className="h-3 w-3" />} onClick={() => toast.success("Opening Stripe customer page. Logged.")}>One-Click Stripe</QuickAction>
           {can('clickup:link') && (
             <QuickAction icon={<ClipboardList className="h-3 w-3" />} onClick={() => setClickupOpen(true)}>

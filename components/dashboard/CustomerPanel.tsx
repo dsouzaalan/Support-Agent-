@@ -6,6 +6,7 @@ import type { Customer, CustomerNote } from "@/lib/mock-data";
 import { platformIncidents, tagLibrary } from "@/lib/mock-data";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
+import { usePermissions } from "@/hooks/usePermissions";
 import {
   TrendingUp, TrendingDown, Minus, AlertTriangle, CheckCircle2, XCircle,
   Mail, Globe, Zap, CreditCard, ExternalLink, BarChart3, Sparkles,
@@ -590,31 +591,44 @@ function McpConsole({ customer, conversationId }: { customer: Customer; conversa
 }
 
 function QuickLinks({ customer, conversationId }: { customer: Customer; conversationId?: string }) {
+  const { can } = usePermissions();
   const [loginLoading, setLoginLoading] = useState(false);
+  const canLogin = can('conversations:one_click_login');
+
   const onLogin = async () => {
     if (!conversationId) return toast.error("No conversation selected");
     if (loginLoading) return;
     setLoginLoading(true);
     try {
       const res = await api.conversations.oneClickLogin(conversationId);
-      window.open(res.data.url, '_blank', 'noopener,noreferrer');
-      toast.success(`Opened session as ${res.data.customerEmail}`);
+      const { url, customerEmail } = res.data;
+      const popup = window.open(url, '_blank', 'noopener,noreferrer');
+      if (!popup) {
+        toast.error(
+          `Popup blocked — allow popups for this site, then try again.`
+        );
+      } else {
+        toast.success(`Customer login opened for ${customerEmail}`);
+      }
     } catch (err: any) {
-      toast.error(err.message || 'Failed to generate login link');
+      toast.error(err.message || 'Failed to open login link');
     } finally {
       setLoginLoading(false);
     }
   };
+
   const onStripe = () => toast.success(`Opening Stripe customer page in new tab. Logged.`);
   return (
     <Section title="Quick Links" last>
-      <button onClick={onLogin} disabled={loginLoading} className="group flex w-full items-center justify-between rounded-md border border-border bg-background px-2.5 py-2 text-xs font-medium transition hover:border-primary/40 hover:bg-primary/5 disabled:opacity-60">
-        <span className="flex items-center gap-2 text-foreground/85">
-          {loginLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" /> : <ExternalLink className="h-3.5 w-3.5 text-primary" />}
-          {loginLoading ? "Opening…" : "One-Click Login"}
-        </span>
-        {!loginLoading && <ArrowRight className="h-3 w-3 text-muted-foreground group-hover:translate-x-0.5 group-hover:text-primary" />}
-      </button>
+      {canLogin && (
+        <button onClick={onLogin} disabled={loginLoading} className="group flex w-full items-center justify-between rounded-md border border-border bg-background px-2.5 py-2 text-xs font-medium transition hover:border-primary/40 hover:bg-primary/5 disabled:opacity-60">
+          <span className="flex items-center gap-2 text-foreground/85">
+            {loginLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" /> : <ExternalLink className="h-3.5 w-3.5 text-primary" />}
+            {loginLoading ? "Opening…" : "One-Click Login"}
+          </span>
+          {!loginLoading && <ArrowRight className="h-3 w-3 text-muted-foreground group-hover:translate-x-0.5 group-hover:text-primary" />}
+        </button>
+      )}
       {customer.loginAudit && (
         <div className="mt-1 flex items-center gap-1 px-1 text-[10px] text-muted-foreground">
           <ShieldAlert className="h-2.5 w-2.5" /> Last accessed by {customer.loginAudit.agent} · {customer.loginAudit.when}

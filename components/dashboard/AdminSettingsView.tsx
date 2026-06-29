@@ -66,7 +66,7 @@ const PERMISSION_GROUPS: { label: string; icon: React.ReactNode; keys: string[] 
   {
     label: "Conversations",
     icon: <MessageSquare className="h-3.5 w-3.5" />,
-    keys: ["conversations:view_all", "conversations:reply", "conversations:assign", "conversations:status"],
+    keys: ["conversations:view_all", "conversations:reply", "conversations:assign", "conversations:status", "conversations:one_click_login"],
   },
   {
     label: "Notes",
@@ -100,6 +100,7 @@ const PERMISSION_LABELS: Record<string, string> = {
   "conversations:reply":       "Reply to conversations",
   "conversations:assign":      "Assign conversations",
   "conversations:status":      "Change conversation status",
+  "conversations:one_click_login": "One-click customer login",
   "notes:create":              "Create internal notes",
   "notes:view":                "View internal notes",
   "articles:view":             "View articles",
