@@ -123,6 +123,8 @@ export const api = {
       apiFetch(`/conversations/${id}/assign`, { method: 'PATCH', body: JSON.stringify({ agentId }) }),
     oneClickLogin: (id: string) =>
       apiFetch(`/conversations/${id}/one-click-login`, { method: 'POST' }),
+    setPriority: (id: string, level: 'none' | 'low' | 'medium' | 'high' | 'urgent') =>
+      apiFetch(`/conversations/${id}/priority`, { method: 'PATCH', body: JSON.stringify({ priority: level }) }),
   },
 
   contacts: {

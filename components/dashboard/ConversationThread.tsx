@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
-import type { Conversation, ConvStatus, Message, MessageAttachment } from "@/lib/mock-data";
+import type { Conversation, ConvStatus, Message, MessageAttachment, PriorityLevel } from "@/lib/mock-data";
 import { suggestedMcp } from "@/lib/mock-data";
 import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
@@ -12,8 +12,9 @@ import {
   AlertTriangle, CheckCheck, MoreHorizontal, UserPlus, Languages,
   BookOpen, FileText, Clock, Stethoscope, StickyNote, AtSign, CreditCard,
   ClipboardList, RotateCcw, Keyboard, Paperclip, Tag, X, Plus, Loader2, BellOff,
-  Bot, ChevronDown,
+  Bot, ChevronDown, Flag, Eye,
 } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { AiCopilotPanel } from "./AiCopilotPanel";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -27,6 +28,50 @@ const DRAFTS: Record<string, string> = {
   c6: "Hi Lin — Scale's API ceiling is 240 req/min. You peaked at 312. Two options: client-side backoff or Enterprise burst pool (1,000 req/min).",
 };
 
+const PRIORITY_OPTIONS: { level: PriorityLevel; label: string; color: string; dotColor: string }[] = [
+  { level: 'none',   label: 'No priority', color: 'text-muted-foreground', dotColor: 'bg-muted-foreground/40' },
+  { level: 'low',    label: 'Low',         color: 'text-sky-500',          dotColor: 'bg-sky-400' },
+  { level: 'medium', label: 'Medium',      color: 'text-amber-500',        dotColor: 'bg-amber-400' },
+  { level: 'high',   label: 'High',        color: 'text-orange-500',       dotColor: 'bg-orange-500' },
+  { level: 'urgent', label: 'Urgent',      color: 'text-red-500',          dotColor: 'bg-red-500' },
+];
+
+function PriorityDropdown({ level, onSelect }: { level: PriorityLevel; onSelect: (l: PriorityLevel) => void }) {
+  const current = PRIORITY_OPTIONS.find((o) => o.level === level) ?? PRIORITY_OPTIONS[0];
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          title="Set priority"
+          className={cn(
+            "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors hover:bg-muted",
+            level === 'none' ? "border-border text-muted-foreground" : `border-current ${current.color}`
+          )}
+        >
+          <span className={cn("h-2 w-2 rounded-full shrink-0", current.dotColor)} />
+          {level === 'none' ? 'Priority' : current.label}
+          <ChevronDown className="h-3 w-3 opacity-60" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-36">
+        <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">Priority</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {PRIORITY_OPTIONS.map((opt) => (
+          <DropdownMenuItem
+            key={opt.level}
+            onClick={() => onSelect(opt.level)}
+            className={cn("gap-2 text-xs cursor-pointer", opt.color)}
+          >
+            <span className={cn("h-2 w-2 rounded-full shrink-0", opt.dotColor)} />
+            {opt.label}
+            {opt.level === level && <Flag className="ml-auto h-3 w-3 opacity-60" />}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 const LANG_LABELS: Record<string, string> = { en: "English", de: "Deutsch", fr: "Français", es: "Español" };
 const LANG_ENGLISH: Record<string, string> = { en: "English", de: "German", fr: "French", es: "Spanish" };
 const AGENT_LANG = "en";
@@ -39,6 +84,7 @@ interface ThreadProps {
   onStatusChange?: (status: ConvStatus) => void;
   onTagsChange?: (tags: { id: string; name: string }[]) => void;
   onSnooze?: (snoozedUntil: number) => void;
+  onPriorityChange?: (level: PriorityLevel) => void;
   highlightMessageId?: string;
   searchQuery?: string;
 }
@@ -73,7 +119,7 @@ const SNOOZE_OPTIONS = [
   { label: "Next week",   getTime: () => Math.floor(Date.now() / 1000) + 7 * 24 * 3600 },
 ];
 
-export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl, onLinkClickup, onStatusChange, onTagsChange, onSnooze, highlightMessageId, searchQuery }: ThreadProps) {
+export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl, onLinkClickup, onStatusChange, onTagsChange, onSnooze, onPriorityChange, highlightMessageId, searchQuery }: ThreadProps) {
   const { user } = useAuth();
   const { can } = usePermissions();
   const currentUserName = user ? `${user.firstName} ${user.lastName ?? ""}`.trim() : "Agent";
@@ -111,6 +157,8 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
   const [showComposeMenu, setShowComposeMenu] = useState(false);
   const [composing, setComposing] = useState(false);
   const [localAssignedAgent, setLocalAssignedAgent] = useState(conversation.assignedAgent ?? null);
+  const [localPriorityLevel, setLocalPriorityLevel] = useState<PriorityLevel>(conversation.priorityLevel ?? 'none');
+  useEffect(() => { setLocalPriorityLevel(conversation.priorityLevel ?? 'none'); }, [conversation.id, conversation.priorityLevel]);
 
   // Tags
   const [convTags, setConvTags] = useState<{ id: string; name: string }[]>(conversation.tags ?? []);
@@ -957,6 +1005,21 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
               <CheckCheck className="h-4 w-4" />
             </IconBtn>
           ))}
+          <PriorityDropdown
+            level={localPriorityLevel}
+            onSelect={async (level) => {
+              const prev = localPriorityLevel;
+              setLocalPriorityLevel(level);
+              try {
+                await api.conversations.setPriority(conversation.id, level);
+                onPriorityChange?.(level);
+                toast.success(level === 'none' ? "Priority removed" : `Priority set to ${level}`);
+              } catch (err: unknown) {
+                setLocalPriorityLevel(prev);
+                toast.error(err instanceof Error ? err.message : "Failed to update priority");
+              }
+            }}
+          />
           <IconBtn label="More"><MoreHorizontal className="h-4 w-4" /></IconBtn>
         </div>
       </div>
@@ -1537,8 +1600,8 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
   );
 }
 
-function IconBtn({ children, label, onClick }: { children: React.ReactNode; label: string; onClick?: () => void }) {
-  return <button onClick={onClick} title={label} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground">{children}</button>;
+function IconBtn({ children, label, onClick, className }: { children: React.ReactNode; label: string; onClick?: () => void; className?: string }) {
+  return <button onClick={onClick} title={label} className={cn("inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground", className)}>{children}</button>;
 }
 function ComposerBtn({ children, ...p }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
   return <button {...p} className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-foreground/80 transition hover:bg-muted hover:text-foreground disabled:opacity-50">{children}</button>;
@@ -1664,45 +1727,266 @@ function AttachmentImage({ a }: { a: MessageAttachment }) {
   );
 }
 
-function MessageAttachments({ attachments, isAgent }: { attachments?: MessageAttachment[]; isAgent: boolean }) {
-  if (!attachments?.length) return null;
+function buildProxyUrl(rawUrl: string): string {
+  const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:5000').replace(/\/$/, '');
+  return `${API_BASE}/api/v1/conversations/attachment-proxy?url=${encodeURIComponent(rawUrl)}`;
+}
+
+function getProxyHeaders(): HeadersInit {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function AttachmentPreviewModal({ attachment, onClose }: { attachment: MessageAttachment | null; onClose: () => void }) {
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [blobLoading, setBlobLoading] = useState(false);
+  const [textContent, setTextContent] = useState<string | null>(null);
+  const [textLoading, setTextLoading] = useState(false);
+  const [textError, setTextError] = useState(false);
+
+  const ct = (attachment?.contentType ?? "").toLowerCase();
+  const name = attachment?.name ?? "";
+  const ext = name.includes(".") ? name.split(".").pop()?.toLowerCase() ?? "" : "";
+
+  const isPdf   = ct.includes("pdf")  || ext === "pdf";
+  const isCsv   = ct.includes("csv")  || ext === "csv";
+  const isAudio = ct.startsWith("audio/") || ["mp3","wav","ogg","m4a","aac","flac"].includes(ext);
+  const isImage = ct.startsWith("image/") || ["jpg","jpeg","png","gif","webp","svg","bmp"].includes(ext);
+  const isVideo = ct.startsWith("video/") || ["mp4","webm","mov","mkv","avi"].includes(ext);
+  const isText  = !isCsv && (ct.startsWith("text/") || ct === "application/json" || ["txt","json","xml","md","log","yaml","yml"].includes(ext));
+
+  // PDF, audio, image, video in modal → fetch via proxy → blob URL (avoids CORS & X-Frame-Options)
+  const needsBlob = isPdf || isAudio || isImage || isVideo;
+  useEffect(() => {
+    if (!attachment || !needsBlob) { setBlobUrl(null); return; }
+    let objectUrl: string | null = null;
+    setBlobLoading(true);
+    fetch(buildProxyUrl(attachment.url), { headers: getProxyHeaders() })
+      .then((r) => r.blob())
+      .then((blob) => { objectUrl = URL.createObjectURL(blob); setBlobUrl(objectUrl); })
+      .catch(() => setBlobUrl(null))
+      .finally(() => setBlobLoading(false));
+    return () => { if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [attachment?.url, needsBlob]);
+
+  // Text / CSV → fetch as text via proxy
+  useEffect(() => {
+    if (!attachment || (!isText && !isCsv)) { setTextContent(null); return; }
+    setTextLoading(true);
+    setTextError(false);
+    fetch(buildProxyUrl(attachment.url), { headers: getProxyHeaders() })
+      .then((r) => r.text())
+      .then((t) => setTextContent(t))
+      .catch(() => setTextError(true))
+      .finally(() => setTextLoading(false));
+  }, [attachment?.url, isText, isCsv]);
+
+  const csvRows: string[][] = useMemo(() => {
+    if (!isCsv || !textContent) return [];
+    return textContent.trim().split("\n").map((row) => row.split(","));
+  }, [isCsv, textContent]);
+
+  if (!attachment) return null;
+
+  const loading = blobLoading || textLoading;
+
   return (
-    <div className="mt-2 flex flex-col gap-2">
-      {attachments.map((a, i) => {
-        const ct = a.contentType || "";
-        if (ct.startsWith("image/")) {
-          return <AttachmentImage key={i} a={a} />;
-        }
-        if (ct.startsWith("video/")) {
-          return (
-            <video key={i} controls className="max-h-48 max-w-full rounded-lg" style={{ maxWidth: "min(320px, 100%)" }}>
-              <source src={a.url} type={ct} />
-              <a href={a.url} target="_blank" rel="noreferrer" className="underline text-xs">
-                {a.name}
-              </a>
-            </video>
-          );
-        }
-        // generic file / PDF / etc.
-        return (
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="flex max-h-[90vh] max-w-4xl flex-col gap-0 p-0">
+        <DialogHeader className="flex flex-row items-center gap-3 border-b px-4 py-3 pr-12">
+          <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <DialogTitle className="flex-1 truncate text-left text-sm font-medium">{name}</DialogTitle>
           <a
-            key={i}
-            href={a.url}
+            href={attachment.url}
             target="_blank"
             rel="noreferrer"
-            className={cn(
-              "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition",
-              isAgent
-                ? "border-primary-foreground/30 text-primary-foreground hover:bg-primary-foreground/10"
-                : "border-border text-foreground hover:bg-muted"
-            )}
+            className="shrink-0 inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium hover:bg-muted transition"
           >
-            <ExternalLink className="h-3 w-3 shrink-0" />
-            {a.name}
+            <ExternalLink className="h-3 w-3" />
+            Open
           </a>
-        );
-      })}
+        </DialogHeader>
+
+        <div className="flex-1 overflow-hidden">
+          {loading && (
+            <div className="flex items-center justify-center py-16 text-xs text-muted-foreground">Loading…</div>
+          )}
+
+          {/* PDF */}
+          {isPdf && !loading && (
+            blobUrl
+              ? <iframe src={blobUrl} className="h-full w-full" style={{ minHeight: "70vh" }} title={name} />
+              : <PreviewUnavailable label="Could not load PDF" url={attachment.url} />
+          )}
+
+          {/* Image */}
+          {isImage && !loading && (
+            blobUrl
+              ? <div className="flex items-center justify-center overflow-auto p-4" style={{ minHeight: "60vh" }}>
+                  <img src={blobUrl} alt={name} className="max-h-[70vh] max-w-full object-contain rounded" />
+                </div>
+              : <PreviewUnavailable label="Could not load image" url={attachment.url} />
+          )}
+
+          {/* Video */}
+          {isVideo && !loading && (
+            blobUrl
+              ? <div className="flex items-center justify-center p-4" style={{ minHeight: "60vh" }}>
+                  <video controls className="max-h-[70vh] max-w-full rounded">
+                    <source src={blobUrl} type={ct || undefined} />
+                  </video>
+                </div>
+              : <PreviewUnavailable label="Could not load video" url={attachment.url} />
+          )}
+
+          {/* Audio */}
+          {isAudio && !loading && (
+            blobUrl
+              ? <div className="flex items-center justify-center p-8" style={{ minHeight: "20vh" }}>
+                  <audio controls src={blobUrl} className="w-full max-w-lg" />
+                </div>
+              : <PreviewUnavailable label="Could not load audio" url={attachment.url} />
+          )}
+
+          {/* Plain text / JSON / XML / Markdown */}
+          {isText && !isCsv && !loading && (
+            <div className="h-full overflow-auto p-4" style={{ minHeight: "60vh" }}>
+              {textError && <p className="text-xs text-destructive">Could not load file content.</p>}
+              {textContent !== null && (
+                <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-foreground">
+                  {textContent}
+                </pre>
+              )}
+            </div>
+          )}
+
+          {/* CSV */}
+          {isCsv && !loading && (
+            <div className="overflow-auto p-4" style={{ minHeight: "60vh" }}>
+              {textError && <p className="text-xs text-destructive">Could not load file content.</p>}
+              {csvRows.length > 0 && (
+                <table className="w-full border-collapse text-xs">
+                  <thead>
+                    <tr>
+                      {csvRows[0].map((cell, ci) => (
+                        <th key={ci} className="border border-border bg-muted px-2 py-1 text-left font-medium text-muted-foreground">
+                          {cell.trim()}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {csvRows.slice(1).map((row, ri) => (
+                      <tr key={ri} className="even:bg-muted/30">
+                        {row.map((cell, ci) => (
+                          <td key={ci} className="border border-border px-2 py-1">{cell.trim()}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
+
+          {/* Unsupported — download only */}
+          {!isPdf && !isImage && !isVideo && !isAudio && !isText && !isCsv && !loading && (
+            <PreviewUnavailable
+              label={ext ? `No preview for .${ext} files` : "Preview not available"}
+              url={attachment.url}
+            />
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function PreviewUnavailable({ label, url }: { label: string; url: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-3 py-16" style={{ minHeight: "40vh" }}>
+      <FileText className="h-10 w-10 text-muted-foreground/50" />
+      <p className="text-sm text-muted-foreground">{label}</p>
+      <a
+        href={url}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition"
+      >
+        <ExternalLink className="h-3 w-3" />
+        Download file
+      </a>
     </div>
+  );
+}
+
+function MessageAttachments({ attachments, isAgent }: { attachments?: MessageAttachment[]; isAgent: boolean }) {
+  const [previewing, setPreviewing] = useState<MessageAttachment | null>(null);
+
+  if (!attachments?.length) return null;
+  return (
+    <>
+      <div className="mt-2 flex flex-col gap-2">
+        {attachments.map((a, i) => {
+          const ct = a.contentType || "";
+          if (ct.startsWith("image/")) {
+            return <AttachmentImage key={i} a={a} />;
+          }
+          if (ct.startsWith("video/")) {
+            return (
+              <video key={i} controls className="max-h-48 max-w-full rounded-lg" style={{ maxWidth: "min(320px, 100%)" }}>
+                <source src={a.url} type={ct} />
+                <a href={a.url} target="_blank" rel="noreferrer" className="underline text-xs">{a.name}</a>
+              </video>
+            );
+          }
+          // non-image, non-video: show filename + preview button
+          return (
+            <div
+              key={i}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium",
+                isAgent
+                  ? "border-primary-foreground/30 text-primary-foreground"
+                  : "border-border text-foreground"
+              )}
+            >
+              <Paperclip className="h-3 w-3 shrink-0 opacity-60" />
+              <span className="max-w-[200px] truncate">{a.name}</span>
+              <div className="ml-1 flex items-center gap-1">
+                <button
+                  onClick={() => setPreviewing(a)}
+                  title="Preview"
+                  className={cn(
+                    "rounded p-0.5 transition",
+                    isAgent
+                      ? "hover:bg-primary-foreground/20 text-primary-foreground/80"
+                      : "hover:bg-muted text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  <Eye className="h-3 w-3" />
+                </button>
+                <a
+                  href={a.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  title="Open in new tab"
+                  className={cn(
+                    "rounded p-0.5 transition",
+                    isAgent
+                      ? "hover:bg-primary-foreground/20 text-primary-foreground/80"
+                      : "hover:bg-muted text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <AttachmentPreviewModal attachment={previewing} onClose={() => setPreviewing(null)} />
+    </>
   );
 }
 

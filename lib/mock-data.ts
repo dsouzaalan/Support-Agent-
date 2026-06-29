@@ -1,3 +1,4 @@
+export type PriorityLevel = 'none' | 'low' | 'medium' | 'high' | 'urgent';
 export type Sentiment = "positive" | "neutral" | "negative";
 export type ChurnRisk = "low" | "medium" | "high";
 export type TierType = "Platinum" | "Gold" | "Silver" | "New";
@@ -102,6 +103,9 @@ export interface Conversation {
   slaMinutes: number;
   firstResponsePending: boolean;
   priorityScore: number;
+  isHighPriority?: boolean;
+  priorityLevel?: PriorityLevel;
+  updatedAtTs?: number;
   viewers?: string[];
   triggerFlags?: string[];
   tags?: { id: string; name: string }[];
