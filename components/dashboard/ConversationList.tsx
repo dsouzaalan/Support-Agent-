@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import type { Conversation, PriorityLevel, TierType } from "@/lib/mock-data";
 import { TierBadge } from "./CustomerPanel";
-import { Search, Circle, AlertTriangle, Filter, Bookmark, Eye, ChevronDown, Plus, UserCheck, Loader2, UserRound, ShieldAlert } from "lucide-react";
+import { Search, Circle, AlertTriangle, Filter, Bookmark, Eye, ChevronDown, Plus, UserCheck, Loader2, UserRound, ShieldAlert, ShieldX } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
@@ -25,7 +25,7 @@ function PriorityBadge({ level }: { level: PriorityLevel }) {
   );
 }
 
-const TABS = ["All", "Open", "Assigned to Me", "Created by Me", "Pending", "Closed"] as const;
+const TABS = ["All", "Open", "Assigned to Me", "Created by Me", "Pending", "Closed", "Spam"] as const;
 type Tab = (typeof TABS)[number];
 type Sort = "priority" | "frustrated" | "waiting" | "sla" | "tier" | "newest";
 
@@ -84,6 +84,8 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
   const [unhealthyOnly, setUnhealthyOnly] = useState(false);
   const [priorityOnly, setPriorityOnly] = useState(false);
   const [savedView, setSavedView] = useState<string | null>(null);
+  const [spamConversations, setSpamConversations] = useState<Conversation[]>([]);
+  const [spamLoading, setSpamLoading] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const listScrollRef = useRef<HTMLDivElement>(null);
 
@@ -131,6 +133,7 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
         case "4": setTab("Created by Me"); break;
         case "5": setTab("Pending"); break;
         case "6": setTab("Closed"); break;
+        case "7": setTab("Spam"); break;
       }
     };
 
@@ -151,6 +154,16 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
   }, [onLoadMore, hasMore, loadingMore]);
+
+  // Fetch spam conversations on demand when the Spam tab is activated
+  useEffect(() => {
+    if (tab !== "Spam") return;
+    setSpamLoading(true);
+    api.conversations.list({ status: "spam", perPage: 50 })
+      .then((res) => setSpamConversations(res?.data?.conversations ?? []))
+      .catch(() => setSpamConversations([]))
+      .finally(() => setSpamLoading(false));
+  }, [tab]);
 
   // Debounced API search for queries 3+ chars — searches beyond the loaded 50
   useEffect(() => {
@@ -210,8 +223,17 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
       base = conversations;
     }
 
+    // Spam tab uses its own fetched list — bypass the normal base entirely
+    if (tab === "Spam") {
+      const qLow = q.trim().toLowerCase();
+      return qLow
+        ? spamConversations.filter((c) => matchesQuery(c, qLow))
+        : spamConversations;
+    }
+
     let list = base.filter((c) => {
       // Tab/status filters apply always (searching or not)
+      if (c.status === "spam") return false; // never show spam in non-spam tabs
       if (tab === "Closed" && c.status !== "closed") return false;
       if (tab !== "Closed" && c.status === "closed") return false;
       if (tab === "Open" && c.status !== "open") return false;
@@ -323,24 +345,42 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
       </div>
 
       <div ref={listScrollRef} className="flex-1 overflow-y-auto">
-        {filtered.map((c) => (
-          <ConvRow
-            key={c.id}
-            c={c}
-            selected={c.id === selectedId}
-            onSelect={() => {
-              const sq = q.trim();
-              if (sq.length >= 2) {
-                router.push(`/inbox/${c.id}?q=${encodeURIComponent(sq)}`);
-              } else {
-                onSelect(c.id);
-              }
-            }}
-            clickupTicket={clickupLinks?.[c.id]}
-            searchQuery={q.trim()}
-          />
-        ))}
-        {filtered.length === 0 && <div className="px-4 py-12 text-center text-xs text-muted-foreground">No conversations match.</div>}
+        {tab === "Spam" && spamLoading ? (
+          <div className="flex items-center justify-center gap-2 py-12 text-xs text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading spam…
+          </div>
+        ) : (
+          <>
+            {tab === "Spam" && filtered.length > 0 && (
+              <div className="flex items-center gap-1.5 border-b border-border bg-red-50/50 dark:bg-red-900/10 px-4 py-2 text-[10px] font-medium text-red-600 dark:text-red-400">
+                <ShieldX className="h-3 w-3" />
+                {filtered.length} spam conversation{filtered.length !== 1 ? "s" : ""} — these were flagged by Intercom
+              </div>
+            )}
+            {filtered.map((c) => (
+              <ConvRow
+                key={c.id}
+                c={c}
+                selected={c.id === selectedId}
+                onSelect={() => {
+                  const sq = q.trim();
+                  if (sq.length >= 2) {
+                    router.push(`/inbox/${c.id}?q=${encodeURIComponent(sq)}`);
+                  } else {
+                    onSelect(c.id);
+                  }
+                }}
+                clickupTicket={clickupLinks?.[c.id]}
+                searchQuery={q.trim()}
+              />
+            ))}
+            {filtered.length === 0 && (
+              <div className="px-4 py-12 text-center text-xs text-muted-foreground">
+                {tab === "Spam" ? "No spam conversations found." : "No conversations match."}
+              </div>
+            )}
+          </>
+        )}
         {loadingMore && (
           <div className="flex items-center justify-center gap-2 py-4 text-xs text-muted-foreground">
             <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading more…

@@ -2,7 +2,7 @@ export type PriorityLevel = 'none' | 'low' | 'medium' | 'high' | 'urgent';
 export type Sentiment = "positive" | "neutral" | "negative";
 export type ChurnRisk = "low" | "medium" | "high";
 export type TierType = "Platinum" | "Gold" | "Silver" | "New";
-export type ConvStatus = "open" | "pending" | "closed";
+export type ConvStatus = "open" | "pending" | "closed" | "spam";
 export type Trajectory = "Expanding" | "Stable" | "Contracting";
 export type AccountStatus = "Healthy" | "At Risk" | "Trial" | "New";
 

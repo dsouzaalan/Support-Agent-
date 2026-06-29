@@ -127,6 +127,8 @@ export const api = {
       apiFetch(`/conversations/${id}/priority`, { method: 'PATCH', body: JSON.stringify({ priority: level }) }),
     redactMessage: (id: string, partId: string) =>
       apiFetch(`/conversations/${id}/parts/${partId}`, { method: 'DELETE' }),
+    updateNote: (id: string, partId: string, body: string) =>
+      apiFetch(`/conversations/${id}/parts/${partId}`, { method: 'PATCH', body: JSON.stringify({ body }) }),
   },
 
   contacts: {

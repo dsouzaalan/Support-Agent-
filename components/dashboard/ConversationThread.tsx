@@ -152,6 +152,9 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
   // AI features
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [editingNoteBody, setEditingNoteBody] = useState("");
+  const [savingNote, setSavingNote] = useState(false);
   const [showCopilot, setShowCopilot] = useState(false);
   const [aiSuggestions, setAiSuggestions] = useState<Array<{ type: string; body?: string; macroId?: string; macroName?: string }>>([]);
   const [showSuggestions, setShowSuggestions] = useState(true);
@@ -670,6 +673,33 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
     }
   };
 
+  const startEditNote = (m: Message) => {
+    setEditingNoteId(m.id);
+    setEditingNoteBody(m.text || m.html?.replace(/<[^>]+>/g, "") || "");
+  };
+
+  const saveEditedNote = async () => {
+    if (!editingNoteId || !editingNoteBody.trim()) return;
+    setSavingNote(true);
+    try {
+      const res = await api.conversations.updateNote(conversation.id, editingNoteId, editingNoteBody.trim());
+      const newPartId = res?.data?.newPartId;
+      setLocalMessages((prev) => prev.map((m) => {
+        if (m.id === editingNoteId) {
+          // Old note is now redacted; update it in-place with new content + new ID
+          return { ...m, id: newPartId ?? m.id, text: editingNoteBody.trim(), html: "", deleted: false };
+        }
+        return m;
+      }));
+      toast.success("Note updated.");
+      setEditingNoteId(null);
+    } catch (err: any) {
+      toast.error(err.message || "Failed to update note");
+    } finally {
+      setSavingNote(false);
+    }
+  };
+
   const handleDeleteMessage = (partId: string) => setDeleteTarget(partId);
 
   const confirmDelete = async () => {
@@ -1132,15 +1162,76 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
         <div className="mx-auto flex max-w-2xl flex-col gap-4">
           {localMessages.map((m) => {
             if (m.from === "note") return can('notes:view') ? (
-              <div key={m.id} id={`msg-${m.id}`} className="mx-auto w-full max-w-[88%] rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-xs">
+              <div key={m.id} id={`msg-${m.id}`} className="group mx-auto w-full max-w-[88%] rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-xs">
                 <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-warning">
-                  <StickyNote className="h-3 w-3" /> Internal note · {m.author} · {m.time}
+                  <StickyNote className="h-3 w-3" />
+                  Internal note · {m.author} · {m.time}
+                  {m.deleted ? (
+                    <span className="ml-auto italic font-normal normal-case text-muted-foreground/60 flex items-center gap-1">
+                      <Trash2 className="h-3 w-3" /> Deleted
+                    </span>
+                  ) : (
+                    <div className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button className="rounded p-0.5 text-warning/60 hover:text-warning hover:bg-warning/10">
+                            <MoreHorizontal className="h-3.5 w-3.5" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-36">
+                          <DropdownMenuItem onClick={() => startEditNote(m)}>
+                            Edit note
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => {
+                              const text = m.text || m.html?.replace(/<[^>]+>/g, "") || "";
+                              navigator.clipboard.writeText(text).then(() => toast.success("Copied")).catch(() => toast.error("Copy failed"));
+                            }}
+                          >
+                            Copy note
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            className="text-destructive focus:text-destructive"
+                            onClick={() => handleDeleteMessage(m.id)}
+                          >
+                            <Trash2 className="mr-2 h-3.5 w-3.5" />
+                            Delete
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  )}
                 </div>
-                {m.html ? (
-                  <div
-                    className="mt-1 im-body im-body--customer"
-                    dangerouslySetInnerHTML={{ __html: m.html }}
-                  />
+
+                {editingNoteId === m.id ? (
+                  <div className="mt-2 flex flex-col gap-2">
+                    <textarea
+                      autoFocus
+                      value={editingNoteBody}
+                      onChange={(e) => setEditingNoteBody(e.target.value)}
+                      rows={3}
+                      className="w-full rounded border border-border bg-background px-2 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-warning/50 resize-none"
+                    />
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={saveEditedNote}
+                        disabled={savingNote || !editingNoteBody.trim()}
+                        className="inline-flex items-center gap-1 rounded bg-warning px-2.5 py-1 text-[10px] font-semibold text-warning-foreground disabled:opacity-50"
+                      >
+                        {savingNote && <Loader2 className="h-3 w-3 animate-spin" />}
+                        {savingNote ? "Saving…" : "Save"}
+                      </button>
+                      <button
+                        onClick={() => setEditingNoteId(null)}
+                        disabled={savingNote}
+                        className="rounded px-2.5 py-1 text-[10px] font-medium text-muted-foreground hover:bg-muted"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : m.deleted ? null : m.html ? (
+                  <div className="mt-1 im-body im-body--customer" dangerouslySetInnerHTML={{ __html: m.html }} />
                 ) : (
                   <p className="mt-1 leading-relaxed text-foreground/85">
                     {m.text.split(/(\s)/).map((part, i) => part.startsWith("@") ?
