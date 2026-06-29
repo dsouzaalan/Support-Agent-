@@ -188,7 +188,8 @@ const DAYS = [
 ];
 
 const ALERT_TYPE_LABELS: Record<string, string> = {
-  sla_breach:          "SLA Breach",
+  sla_breach_ftr:      "SLA Breach (FTR)",
+  sla_breach_ntr:      "SLA Breach (NTR)",
   sentiment_negative:  "Negative Sentiment",
   churn_high:          "High Churn Risk",
   chargeback_keyword:  "Chargeback Keyword",
@@ -209,9 +210,12 @@ function relativeTime(date: string | Date): string {
 function AlertsTab({ onOpenConversation }: { onOpenConversation: (id: string) => void }) {
   const [loading, setLoading] = useState(true);
 
-  // Slack
-  const [channel, setChannel]         = useState("");
-  const [savingSlack, setSavingSlack] = useState(false);
+  // Slack channel names (webhook URLs live in env vars)
+  const [channelDefault,    setChannelDefault]    = useState("");
+  const [channelSla,        setChannelSla]        = useState("");
+  const [channelSentiment,  setChannelSentiment]  = useState("");
+  const [channelChargeback, setChannelChargeback] = useState("");
+  const [savingSlack,       setSavingSlack]       = useState(false);
 
   // Alert toggles
   const [alertSla,         setAlertSla]         = useState(true);
@@ -220,11 +224,16 @@ function AlertsTab({ onOpenConversation }: { onOpenConversation: (id: string) =>
   const [alertChargeback,  setAlertChargeback]  = useState(false);
   const [savingToggles,    setSavingToggles]    = useState(false);
 
-  // SLA thresholds
-  const [platinum, setPlatinum] = useState(15);
-  const [gold,     setGold]     = useState(15);
-  const [silver,   setSilver]   = useState(30);
-  const [tierNew,  setTierNew]  = useState(60);
+  // FTR thresholds
+  const [ftrPlatinum, setFtrPlatinum] = useState(15);
+  const [ftrGold,     setFtrGold]     = useState(15);
+  const [ftrSilver,   setFtrSilver]   = useState(30);
+  const [ftrNew,      setFtrNew]      = useState(60);
+  // NTR thresholds
+  const [ntrPlatinum, setNtrPlatinum] = useState(30);
+  const [ntrGold,     setNtrGold]     = useState(60);
+  const [ntrSilver,   setNtrSilver]   = useState(120);
+  const [ntrNew,      setNtrNew]      = useState(240);
   const [savingThresholds, setSavingThresholds] = useState(false);
 
   // Working hours
@@ -242,15 +251,22 @@ function AlertsTab({ onOpenConversation }: { onOpenConversation: (id: string) =>
     api.settings.get()
       .then((res) => {
         const d = res.data ?? res;
-        setChannel(d.slackChannel ?? "");
+        setChannelDefault(d.slackChannel ?? "");
+        setChannelSla(d.slackChannelSla ?? "");
+        setChannelSentiment(d.slackChannelSentiment ?? "");
+        setChannelChargeback(d.slackChannelChargeback ?? "");
         setAlertSla(d.alertSlaEnabled ?? true);
         setAlertSentiment(d.alertSentimentEnabled ?? false);
         setAlertChurn(d.alertChurnEnabled ?? false);
         setAlertChargeback(d.alertChargebackEnabled ?? false);
-        setPlatinum(d.slaThresholdPlatinum ?? 15);
-        setGold(d.slaThresholdGold ?? 15);
-        setSilver(d.slaThresholdSilver ?? 30);
-        setTierNew(d.slaThresholdNew ?? 60);
+        setFtrPlatinum(d.slaThresholdPlatinum ?? 15);
+        setFtrGold(d.slaThresholdGold ?? 15);
+        setFtrSilver(d.slaThresholdSilver ?? 30);
+        setFtrNew(d.slaThresholdNew ?? 60);
+        setNtrPlatinum(d.slaNtrThresholdPlatinum ?? 30);
+        setNtrGold(d.slaNtrThresholdGold ?? 60);
+        setNtrSilver(d.slaNtrThresholdSilver ?? 120);
+        setNtrNew(d.slaNtrThresholdNew ?? 240);
         setWorkStart(d.workingHoursStart ?? "09:00");
         setWorkEnd(d.workingHoursEnd ?? "18:00");
         setWorkTz(d.workingHoursTimezone ?? "America/Los_Angeles");
@@ -268,7 +284,12 @@ function AlertsTab({ onOpenConversation }: { onOpenConversation: (id: string) =>
   const saveSlack = async () => {
     setSavingSlack(true);
     try {
-      await api.settings.update({ slackChannel: channel || null });
+      await api.settings.update({
+        slackChannel:            channelDefault    || null,
+        slackChannelSla:         channelSla        || null,
+        slackChannelSentiment:   channelSentiment  || null,
+        slackChannelChargeback:  channelChargeback || null,
+      });
       toast.success("Slack settings saved");
     } catch (e: any) { toast.error(e.message); }
     finally { setSavingSlack(false); }
@@ -286,10 +307,14 @@ function AlertsTab({ onOpenConversation }: { onOpenConversation: (id: string) =>
     setSavingThresholds(true);
     try {
       await api.settings.update({
-        slaThresholdPlatinum: platinum,
-        slaThresholdGold:     gold,
-        slaThresholdSilver:   silver,
-        slaThresholdNew:      tierNew,
+        slaThresholdPlatinum:    ftrPlatinum,
+        slaThresholdGold:        ftrGold,
+        slaThresholdSilver:      ftrSilver,
+        slaThresholdNew:         ftrNew,
+        slaNtrThresholdPlatinum: ntrPlatinum,
+        slaNtrThresholdGold:     ntrGold,
+        slaNtrThresholdSilver:   ntrSilver,
+        slaNtrThresholdNew:      ntrNew,
       });
       toast.success("SLA thresholds saved");
     } catch (e: any) { toast.error(e.message); }
@@ -323,21 +348,33 @@ function AlertsTab({ onOpenConversation }: { onOpenConversation: (id: string) =>
 
       {/* Slack */}
       <section className="rounded-lg border border-border bg-card p-4 sm:p-5">
-        <div className="mb-3 flex items-center gap-2">
+        <div className="mb-1 flex items-center gap-2">
           <Webhook className="h-3.5 w-3.5 text-primary" />
           <h2 className="text-sm font-semibold">Slack integration</h2>
         </div>
-        <div>
-          <label className="mb-1 block text-xs font-medium text-muted-foreground">Channel</label>
-          <div className="flex items-center gap-2 rounded-md border border-border bg-background px-3 py-2">
-            <Hash className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            <input
-              value={channel}
-              onChange={(e) => setChannel(e.target.value)}
-              placeholder="zapmail-alerts"
-              className="min-w-0 flex-1 bg-transparent text-sm focus:outline-none"
-            />
-          </div>
+        <p className="mb-4 text-xs text-muted-foreground">
+          Enter the Slack channel name for each alert type. Webhook URLs are configured via environment variables.
+        </p>
+        <div className="space-y-3">
+          {[
+            { label: "Default channel",       placeholder: "#support-alerts",  value: channelDefault,    set: setChannelDefault, },
+            // { label: "SLA breaches",           placeholder: "#sla-alerts",      value: channelSla,        set: setChannelSla,        hint: "Uses ZAPMAIL_SLACK_WEBHOOK_SLA" },
+            { label: "Sentiment & churn",      placeholder: "#customer-health", value: channelSentiment,  set: setChannelSentiment, },
+            // { label: "Chargeback / dispute",   placeholder: "#risk-alerts",     value: channelChargeback, set: setChannelChargeback, hint: "Uses ZAPMAIL_SLACK_WEBHOOK_CHARGEBACK" },
+          ].map(({ label, placeholder, value, set}) => (
+            <div key={label}>
+              <div className="mb-1 flex items-center justify-between">
+                <label className="text-xs font-medium text-muted-foreground">{label}</label>
+                {/* <span className="text-[10px] text-muted-foreground">{hint}</span> */}
+              </div>
+              <input
+                value={value}
+                onChange={(e) => set(e.target.value)}
+                placeholder={placeholder}
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-xs focus:border-primary/50 focus:outline-none"
+              />
+            </div>
+          ))}
         </div>
         <div className="mt-3 flex justify-end">
           <button
@@ -390,28 +427,67 @@ function AlertsTab({ onOpenConversation }: { onOpenConversation: (id: string) =>
         <p className="mb-3 text-xs text-muted-foreground">
           Working-hours minutes before an SLA breach alert fires, per customer tier.
         </p>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          {[
-            { label: "Platinum 💎", value: platinum, set: setPlatinum },
-            { label: "Gold 🥇",     value: gold,     set: setGold },
-            { label: "Silver 🥈",   value: silver,   set: setSilver },
-            { label: "New 🆕",      value: tierNew,  set: setTierNew },
-          ].map(({ label, value, set }) => (
-            <div key={label}>
-              <label className="mb-1 block text-[11px] font-medium text-muted-foreground">{label}</label>
-              <div className="flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1.5">
-                <input
-                  type="number"
-                  min={1}
-                  value={value}
-                  onChange={(e) => set(Math.max(1, Number(e.target.value)))}
-                  className="w-full bg-transparent text-sm tabular-nums focus:outline-none"
-                />
-                <span className="shrink-0 text-xs text-muted-foreground">min</span>
+
+        {/* FTR row */}
+        <div className="mb-4">
+          <div className="mb-2 flex items-center gap-1.5">
+            <span className="text-xs font-semibold text-foreground">FTR</span>
+            <span className="text-[10px] text-muted-foreground">First Time Response — no agent has replied yet</span>
+          </div>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {[
+              { label: "Platinum 💎", value: ftrPlatinum, set: setFtrPlatinum },
+              { label: "Gold 🥇",     value: ftrGold,     set: setFtrGold },
+              { label: "Silver 🥈",   value: ftrSilver,   set: setFtrSilver },
+              { label: "New 🆕",      value: ftrNew,      set: setFtrNew },
+            ].map(({ label, value, set }) => (
+              <div key={label}>
+                <label className="mb-1 block text-[11px] font-medium text-muted-foreground">{label}</label>
+                <div className="flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1.5">
+                  <input
+                    type="number"
+                    min={1}
+                    value={value}
+                    onChange={(e) => set(Math.max(1, Number(e.target.value)))}
+                    className="w-full bg-transparent text-sm tabular-nums focus:outline-none"
+                  />
+                  <span className="shrink-0 text-xs text-muted-foreground">min</span>
+                </div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
+
+        {/* NTR row */}
+        <div>
+          <div className="mb-2 flex items-center gap-1.5">
+            <span className="text-xs font-semibold text-foreground">NTR</span>
+            <span className="text-[10px] text-muted-foreground">Next Time Response — customer replied after agent</span>
+          </div>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {[
+              { label: "Platinum 💎", value: ntrPlatinum, set: setNtrPlatinum },
+              { label: "Gold 🥇",     value: ntrGold,     set: setNtrGold },
+              { label: "Silver 🥈",   value: ntrSilver,   set: setNtrSilver },
+              { label: "New 🆕",      value: ntrNew,      set: setNtrNew },
+            ].map(({ label, value, set }) => (
+              <div key={label}>
+                <label className="mb-1 block text-[11px] font-medium text-muted-foreground">{label}</label>
+                <div className="flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1.5">
+                  <input
+                    type="number"
+                    min={1}
+                    value={value}
+                    onChange={(e) => set(Math.max(1, Number(e.target.value)))}
+                    className="w-full bg-transparent text-sm tabular-nums focus:outline-none"
+                  />
+                  <span className="shrink-0 text-xs text-muted-foreground">min</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
         <div className="mt-3 flex justify-end">
           <button
             onClick={saveThresholds}
@@ -501,47 +577,11 @@ function AlertsTab({ onOpenConversation }: { onOpenConversation: (id: string) =>
       </section>
 
       {/* Recent alerts */}
-      <section className="rounded-lg border border-border bg-card p-4 sm:p-5">
-        <div className="mb-3 flex items-center gap-2">
-          <Bell className="h-3.5 w-3.5 text-primary" />
-          <h2 className="text-sm font-semibold">Recent alerts fired</h2>
-        </div>
-        {alertsLoading ? (
-          <div className="flex items-center gap-1.5 py-4 text-xs text-muted-foreground">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading…
-          </div>
-        ) : recentAlerts.length === 0 ? (
-          <p className="py-4 text-center text-sm text-muted-foreground">No alerts fired yet.</p>
-        ) : (
-          <div className="space-y-2">
-            {recentAlerts.map((a: any) => (
-              <div key={a.id} className="rounded-md border border-border bg-background p-3 text-xs">
-                <div className="mb-1 flex flex-wrap items-center justify-between gap-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-semibold">{a.customerName}</span>
-                    <span className="rounded bg-muted px-1.5 py-0 text-[9px] font-semibold uppercase">
-                      {TIER_EMOJI[a.customerTier] ?? ""} {a.customerTier}
-                    </span>
-                    <span className="text-muted-foreground">
-                      · {ALERT_TYPE_LABELS[a.alertType] ?? a.alertType}
-                    </span>
-                  </div>
-                  <span className="text-[10px] text-muted-foreground">{relativeTime(a.firedAt)}</span>
-                </div>
-                {a.messageSnippet && (
-                  <p className="mb-1.5 italic text-muted-foreground">&ldquo;{a.messageSnippet}&rdquo;</p>
-                )}
-                <button
-                  onClick={() => onOpenConversation(a.conversationId)}
-                  className="inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
-                >
-                  Open conversation <ExternalLink className="h-2.5 w-2.5" />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
+      <RecentAlertsPanel
+        alerts={recentAlerts}
+        loading={alertsLoading}
+        onOpenConversation={onOpenConversation}
+      />
 
     </div>
   );
@@ -1196,6 +1236,178 @@ function ArticlesTab() {
         ))}
       </div>
     </div>
+  );
+}
+
+// ─── Recent alerts panel ──────────────────────────────────────────────────────
+
+const ALERT_FILTER_GROUPS = [
+  { key: "all",         label: "All" },
+  { key: "sla",         label: "SLA" },
+  { key: "sentiment",   label: "Sentiment" },
+  { key: "churn",       label: "Churn" },
+  { key: "chargeback",  label: "Chargeback" },
+] as const;
+
+type AlertFilterKey = typeof ALERT_FILTER_GROUPS[number]["key"];
+
+function matchesFilter(alertType: string, filter: AlertFilterKey): boolean {
+  if (filter === "all") return true;
+  if (filter === "sla") return alertType.startsWith("sla_breach");
+  if (filter === "sentiment") return alertType === "sentiment_negative";
+  if (filter === "churn") return alertType === "churn_high";
+  if (filter === "chargeback") return alertType === "chargeback_keyword";
+  return false;
+}
+
+const ALERT_STYLE: Record<string, { dot: string; border: string; badge: string; label: string }> = {
+  sla_breach_ftr:     { dot: "bg-red-500",    border: "border-l-red-400",    badge: "bg-red-50 text-red-600 dark:bg-red-900/30 dark:text-red-400",    label: "SLA · FTR" },
+  sla_breach_ntr:     { dot: "bg-orange-500", border: "border-l-orange-400", badge: "bg-orange-50 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400", label: "SLA · NTR" },
+  sla_breach:         { dot: "bg-red-500",    border: "border-l-red-400",    badge: "bg-red-50 text-red-600 dark:bg-red-900/30 dark:text-red-400",    label: "SLA Breach" },
+  sentiment_negative: { dot: "bg-amber-500",  border: "border-l-amber-400",  badge: "bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400", label: "Sentiment" },
+  churn_high:         { dot: "bg-amber-500",  border: "border-l-amber-400",  badge: "bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400", label: "Churn Risk" },
+  chargeback_keyword: { dot: "bg-rose-600",   border: "border-l-rose-500",   badge: "bg-rose-50 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400",  label: "Chargeback" },
+};
+
+const DEFAULT_ALERT_STYLE = { dot: "bg-muted-foreground", border: "border-l-border", badge: "bg-muted text-muted-foreground", label: "Alert" };
+const PREVIEW_COUNT = 5;
+
+function RecentAlertsPanel({
+  alerts,
+  loading,
+  onOpenConversation,
+}: {
+  alerts: any[];
+  loading: boolean;
+  onOpenConversation: (id: string) => void;
+}) {
+  const [filter, setFilter] = useState<AlertFilterKey>("all");
+  const [showAll, setShowAll] = useState(false);
+
+  const filtered = alerts.filter((a) => matchesFilter(a.alertType, filter));
+  const visible  = showAll ? filtered : filtered.slice(0, PREVIEW_COUNT);
+  const hidden   = filtered.length - PREVIEW_COUNT;
+
+  // reset showAll when filter changes
+  const handleFilter = (key: AlertFilterKey) => { setFilter(key); setShowAll(false); };
+
+  // count per group for badges
+  const counts: Record<AlertFilterKey, number> = {
+    all:        alerts.length,
+    sla:        alerts.filter((a) => matchesFilter(a.alertType, "sla")).length,
+    sentiment:  alerts.filter((a) => matchesFilter(a.alertType, "sentiment")).length,
+    churn:      alerts.filter((a) => matchesFilter(a.alertType, "churn")).length,
+    chargeback: alerts.filter((a) => matchesFilter(a.alertType, "chargeback")).length,
+  };
+
+  return (
+    <section className="rounded-lg border border-border bg-card p-4 sm:p-5">
+      {/* Header */}
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Bell className="h-3.5 w-3.5 text-primary" />
+          <h2 className="text-sm font-semibold">Recent alerts</h2>
+          {!loading && alerts.length > 0 && (
+            <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold tabular-nums text-muted-foreground">
+              {alerts.length}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Filter pills — only show if there are alerts */}
+      {!loading && alerts.length > 0 && (
+        <div className="mb-3 flex flex-wrap gap-1.5">
+          {ALERT_FILTER_GROUPS.filter((g) => g.key === "all" || counts[g.key] > 0).map((g) => (
+            <button
+              key={g.key}
+              onClick={() => handleFilter(g.key)}
+              className={cn(
+                "inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition",
+                filter === g.key
+                  ? "border-primary bg-primary/10 text-primary"
+                  : "border-border text-muted-foreground hover:border-primary/30 hover:text-foreground"
+              )}
+            >
+              {g.label}
+              <span className={cn(
+                "rounded-full px-1 text-[9px] font-semibold tabular-nums",
+                filter === g.key ? "bg-primary/20 text-primary" : "bg-muted text-muted-foreground"
+              )}>
+                {counts[g.key]}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Content */}
+      {loading ? (
+        <div className="flex items-center gap-1.5 py-6 text-xs text-muted-foreground">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading…
+        </div>
+      ) : filtered.length === 0 ? (
+        <p className="py-6 text-center text-sm text-muted-foreground">
+          {alerts.length === 0 ? "No alerts fired yet." : "No alerts in this category."}
+        </p>
+      ) : (
+        <>
+          <div className="divide-y divide-border overflow-hidden rounded-md border border-border">
+            {visible.map((a: any) => {
+              const style = ALERT_STYLE[a.alertType] ?? DEFAULT_ALERT_STYLE;
+              return (
+                <div
+                  key={a.id}
+                  className={cn("flex items-start gap-3 border-l-[3px] bg-background px-3 py-2.5 text-xs", style.border)}
+                >
+                  {/* Color dot */}
+                  <span className={cn("mt-1 h-1.5 w-1.5 shrink-0 rounded-full", style.dot)} />
+
+                  {/* Main content */}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="font-semibold text-foreground">{a.customerName}</span>
+                      <span className="text-[9px] font-semibold uppercase text-muted-foreground">
+                        {TIER_EMOJI[a.customerTier] ?? ""} {a.customerTier}
+                      </span>
+                      <span className={cn("rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide", style.badge)}>
+                        {style.label}
+                      </span>
+                    </div>
+                    {a.messageSnippet && (
+                      <p className="mt-0.5 line-clamp-1 text-muted-foreground italic">
+                        &ldquo;{a.messageSnippet}&rdquo;
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Right side: time + link */}
+                  <div className="flex shrink-0 flex-col items-end gap-1">
+                    <span className="text-[10px] text-muted-foreground">{relativeTime(a.firedAt)}</span>
+                    <button
+                      onClick={() => onOpenConversation(a.conversationId)}
+                      className="inline-flex items-center gap-0.5 text-[10px] font-medium text-primary hover:underline"
+                    >
+                      Open <ExternalLink className="h-2.5 w-2.5" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Show more / less */}
+          {filtered.length > PREVIEW_COUNT && (
+            <button
+              onClick={() => setShowAll((v) => !v)}
+              className="mt-2 w-full rounded-md border border-dashed border-border py-1.5 text-xs text-muted-foreground transition hover:border-primary/40 hover:text-primary"
+            >
+              {showAll ? "Show less" : `Show ${hidden} more`}
+            </button>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 
