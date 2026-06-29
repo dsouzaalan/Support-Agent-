@@ -10,7 +10,7 @@ import { usePermissions } from "@/hooks/usePermissions";
 import {
   Sparkles, SendHorizonal, Wand2, ExternalLink,
   AlertTriangle, CheckCheck, MoreHorizontal, UserPlus, Languages,
-  BookOpen, FileText, Clock, Stethoscope, StickyNote, AtSign, CreditCard,
+  BookOpen, FileText, Clock, Stethoscope, StickyNote, CreditCard,
   ClipboardList, RotateCcw, Keyboard, Paperclip, Tag, X, Plus, Loader2, BellOff,
   Bot, ChevronDown, Flag, Eye, Trash2,
 } from "lucide-react";
@@ -195,6 +195,55 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const replyRef = useRef<HTMLTextAreaElement>(null);
+  const noteRef = useRef<HTMLTextAreaElement>(null);
+
+  // @mention state
+  const [mention, setMention] = useState<{ open: boolean; query: string; index: number; target: 'reply' | 'note' }>({ open: false, query: '', index: 0, target: 'reply' });
+
+  function getMentionQuery(text: string, cursor: number): string | null {
+    const before = text.slice(0, cursor);
+    const match = before.match(/@([^\s@]*)$/);
+    return match ? match[1] : null;
+  }
+
+  function insertMention(agentName: string, text: string, cursor: number, setter: (v: string) => void, ref: React.RefObject<HTMLTextAreaElement | null>) {
+    const before = text.slice(0, cursor);
+    const after = text.slice(cursor);
+    const replaced = before.replace(/@([^\s@]*)$/, `@${agentName} `);
+    setter(replaced + after);
+    setMention({ open: false, query: '', index: 0, target: 'reply' });
+    setTimeout(() => {
+      if (ref.current) {
+        const pos = replaced.length;
+        ref.current.focus();
+        ref.current.setSelectionRange(pos, pos);
+      }
+    }, 0);
+  }
+
+  const filteredMentions = agentList.filter((a) =>
+    mention.query === '' || a.name.toLowerCase().includes(mention.query.toLowerCase())
+  ).slice(0, 6);
+
+  function handleMentionChange(text: string, cursor: number, target: 'reply' | 'note', setter: (v: string) => void) {
+    setter(text);
+    const q = getMentionQuery(text, cursor);
+    if (q !== null) {
+      if (agentList.length === 0 && !agentListLoading) {
+        setAgentListLoading(true);
+        api.agents.list().then((res) => {
+          const agents: any[] = res.data ?? [];
+          setAgentList(agents.filter((a) => a.status === 'active').map((a: any) => ({
+            id: a.id,
+            name: [a.firstName, a.lastName].filter(Boolean).join(' ').trim() || a.email,
+          })));
+        }).catch(() => {}).finally(() => setAgentListLoading(false));
+      }
+      setMention({ open: true, query: q, index: 0, target });
+    } else {
+      setMention((m) => m.open ? { ...m, open: false } : m);
+    }
+  }
 
   // Stable refs for keyboard handler — avoids stale closures without re-registering listener
   const conversationRef = useRef(conversation);
@@ -1077,7 +1126,6 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
               }
             }}
           />
-          <IconBtn label="More"><MoreHorizontal className="h-4 w-4" /></IconBtn>
         </div>
       </div>
 
@@ -1365,9 +1413,21 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
           <div className="mb-2 rounded-md border border-warning/40 bg-warning/5 p-2">
             <div className="mb-1 text-[10px] font-semibold uppercase text-warning">Add internal note (not sent to customer)</div>
             <textarea
+              ref={noteRef}
               value={noteVal}
-              onChange={(e) => setNoteVal(e.target.value)}
+              onChange={(e) => handleMentionChange(e.target.value, e.target.selectionStart, 'note', setNoteVal)}
               onKeyDown={(e) => {
+                if (mention.open && mention.target === 'note' && filteredMentions.length > 0) {
+                  if (e.key === 'ArrowDown') { e.preventDefault(); setMention((m) => ({ ...m, index: Math.min(m.index + 1, filteredMentions.length - 1) })); return; }
+                  if (e.key === 'ArrowUp') { e.preventDefault(); setMention((m) => ({ ...m, index: Math.max(m.index - 1, 0) })); return; }
+                  if (e.key === 'Enter' || e.key === 'Tab') {
+                    e.preventDefault();
+                    const a = filteredMentions[mention.index];
+                    if (a) insertMention(a.name, noteVal, noteRef.current?.selectionStart ?? noteVal.length, setNoteVal, noteRef);
+                    return;
+                  }
+                  if (e.key === 'Escape') { setMention((m) => ({ ...m, open: false })); return; }
+                }
                 if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); addNote(); }
                 if (e.key === "Escape") { setShowNote(false); }
               }}
@@ -1577,13 +1637,52 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
             ))}
           </div>
         )}
+        {/* @mention dropdown */}
+        {mention.open && filteredMentions.length > 0 && (
+          <div className="mb-1 rounded-md border border-border bg-popover shadow-lg overflow-hidden">
+            {agentListLoading ? (
+              <div className="flex items-center gap-1.5 px-3 py-2 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" /> Loading…</div>
+            ) : (
+              filteredMentions.map((a, i) => (
+                <button
+                  key={a.id}
+                  className={cn("flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-accent", i === mention.index && "bg-accent")}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    const isReply = mention.target === 'reply';
+                    const ref = isReply ? replyRef : noteRef;
+                    const text = isReply ? draft : noteVal;
+                    const cursor = ref.current?.selectionStart ?? text.length;
+                    insertMention(a.name, text, cursor, isReply ? setDraft : setNoteVal, ref);
+                  }}
+                >
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-bold text-primary">
+                    {a.name.charAt(0).toUpperCase()}
+                  </span>
+                  <span className="font-medium">{a.name}</span>
+                </button>
+              ))
+            )}
+          </div>
+        )}
         <div className={cn("rounded-lg border border-border bg-background", can('conversations:reply') && "focus-within:border-primary/60 focus-within:ring-2 focus-within:ring-primary/15")}>
           {can('conversations:reply') ? (
             <textarea
               ref={replyRef}
               value={draft}
-              onChange={(e) => setDraft(e.target.value)}
+              onChange={(e) => handleMentionChange(e.target.value, e.target.selectionStart, 'reply', setDraft)}
               onKeyDown={(e) => {
+                if (mention.open && filteredMentions.length > 0) {
+                  if (e.key === 'ArrowDown') { e.preventDefault(); setMention((m) => ({ ...m, index: Math.min(m.index + 1, filteredMentions.length - 1) })); return; }
+                  if (e.key === 'ArrowUp') { e.preventDefault(); setMention((m) => ({ ...m, index: Math.max(m.index - 1, 0) })); return; }
+                  if (e.key === 'Enter' || e.key === 'Tab') {
+                    e.preventDefault();
+                    const a = filteredMentions[mention.index];
+                    if (a) insertMention(a.name, draft, replyRef.current?.selectionStart ?? draft.length, setDraft, replyRef);
+                    return;
+                  }
+                  if (e.key === 'Escape') { setMention((m) => ({ ...m, open: false })); return; }
+                }
                 if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
                 if (e.key === "Escape") { setDraft(""); setToneCheck(null); setTranslatePreview(null); }
               }}
@@ -1619,7 +1718,6 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
                   <Paperclip className="h-3.5 w-3.5" />
                 </ComposerBtn>
               )}
-              {can('notes:create') && <ComposerBtn onClick={() => toast("Mention @teammate inside a note")}><AtSign className="h-3.5 w-3.5" /></ComposerBtn>}
             </div>
             <div className="relative flex items-center gap-1.5">
               {/* Keyboard shortcuts popover — fixed so it escapes overflow:hidden parents */}

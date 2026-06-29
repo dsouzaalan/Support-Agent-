@@ -133,6 +133,10 @@ export const api = {
 
   contacts: {
     search: (q: string) => apiFetch(`/contacts/search?q=${encodeURIComponent(q)}`),
+    createNote: (contactId: string, body: string) =>
+      apiFetch(`/contacts/${contactId}/notes`, { method: 'POST', body: JSON.stringify({ body }) }),
+    deleteNote: (noteId: string) =>
+      apiFetch(`/contacts/notes/${noteId}`, { method: 'DELETE' }),
   },
 
   tags: {

@@ -78,7 +78,7 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
   const [apiResults, setApiResults] = useState<Conversation[] | null>(null);
   const [apiSearching, setApiSearching] = useState(false);
   const searchDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [sort, setSort] = useState<Sort>("priority");
+  const [sort, setSort] = useState<Sort>("newest");
   const [tierFilter, setTierFilter] = useState<TierType | "all">("all");
   const [tagFilter, setTagFilter] = useState<string | "all">("all");
   const [unhealthyOnly, setUnhealthyOnly] = useState(false);
@@ -301,7 +301,7 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
             className="w-full bg-transparent text-sm placeholder:text-muted-foreground focus:outline-none" />
           {apiSearching && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />}
         </div>
-        <div className="mt-3 flex gap-1 overflow-x-auto">
+        <div className="mt-3 flex gap-1 overflow-x-auto pb-1 [&::-webkit-scrollbar]:h-[3px] [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border [&::-webkit-scrollbar-track]:bg-transparent">
           {TABS.map((f) => (
             <button key={f} onClick={() => setTab(f)}
               className={cn("whitespace-nowrap rounded-md px-2.5 py-1 text-xs font-medium transition",
@@ -332,7 +332,7 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
           </button>
         </div>
         {/* Saved views */}
-        <div className="mt-2 flex items-center gap-1 overflow-x-auto">
+        <div className="mt-2 flex items-center gap-1 overflow-x-auto pb-1 [&::-webkit-scrollbar]:h-[3px] [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border [&::-webkit-scrollbar-track]:bg-transparent">
           <Bookmark className="h-3 w-3 shrink-0 text-muted-foreground" />
           {["My VIPs waiting", "Frustrated & unassigned", "Account health alerts"].map((v) => (
             <button key={v} onClick={() => applySaved(v)}

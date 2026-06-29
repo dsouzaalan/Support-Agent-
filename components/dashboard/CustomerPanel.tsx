@@ -29,6 +29,9 @@ export function CustomerPanel({ customer, clickupTicket, conversationTags, assig
   const [tags, setTags] = useState<string[]>(customer.tags);
   const [notes, setNotes] = useState<CustomerNote[]>(customer.notes);
 
+  // Sync notes when the conversation changes (different customer)
+  useEffect(() => { setNotes(customer.notes); }, [customer.id]);
+
   return (
     <aside className="flex w-full flex-col overflow-y-auto border-l border-border bg-card">
       <Identity customer={customer} tags={tags} setTags={setTags} clickupTicket={clickupTicket} conversationTags={conversationTags} />
@@ -39,7 +42,7 @@ export function CustomerPanel({ customer, clickupTicket, conversationTags, assig
       <Destinations customer={customer} />
       <AccountHealth customer={customer} />
       <SentimentRisk customer={customer} conversationId={conversationId} />
-      <Notes notes={notes} setNotes={setNotes} />
+      <Notes notes={notes} setNotes={setNotes} contactId={customer.id} />
       <PastConvos customer={customer} />
       <McpConsole customer={customer} conversationId={conversationId} />
       <QuickLinks customer={customer} conversationId={conversationId} />
@@ -412,17 +415,39 @@ function SentimentRisk({ customer, conversationId }: { customer: Customer; conve
   );
 }
 
-function Notes({ notes, setNotes }: { notes: CustomerNote[]; setNotes: (n: CustomerNote[]) => void }) {
+function Notes({ notes, setNotes, contactId }: { notes: CustomerNote[]; setNotes: (n: CustomerNote[]) => void; contactId: string }) {
   const [val, setVal] = useState("");
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editVal, setEditVal] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  const add = () => {
+  const add = async () => {
     if (!val.trim()) return;
-    setNotes([{ id: String(Date.now()), author: CURRENT_AGENT.name, authorId: CURRENT_AGENT.id, when: "just now", text: val.trim() }, ...notes]);
-    setVal("");
+    setAdding(true);
+    try {
+      const res = await api.contacts.createNote(contactId, val.trim());
+      const created: CustomerNote = res?.data ?? {
+        id: String(Date.now()), author: "You", authorId: "me", when: "just now", text: val.trim(),
+      };
+      setNotes([created, ...notes]);
+      setVal("");
+    } catch (err: any) {
+      toast.error(err.message || "Failed to add note");
+    } finally {
+      setAdding(false);
+    }
   };
-  const canEdit = (n: CustomerNote) => n.authorId === CURRENT_AGENT.id || CURRENT_AGENT.isAdmin;
+
+  const remove = async (noteId: string) => {
+    setDeletingId(noteId);
+    try {
+      await api.contacts.deleteNote(noteId);
+      setNotes(notes.filter((x) => x.id !== noteId));
+    } catch (err: any) {
+      toast.error(err.message || "Failed to delete note");
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   return (
     <Section title="Notes">
@@ -430,38 +455,33 @@ function Notes({ notes, setNotes }: { notes: CustomerNote[]; setNotes: (n: Custo
         <textarea
           value={val}
           onChange={(e) => setVal(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) add(); }}
           placeholder="Add a private note about this customer…"
           rows={2}
           className="w-full resize-none bg-transparent px-2.5 py-2 text-xs placeholder:text-muted-foreground focus:outline-none"
         />
         <div className="flex justify-end border-t border-border px-1.5 py-1">
-          <button onClick={add} disabled={!val.trim()} className="rounded bg-primary px-2 py-1 text-[10px] font-semibold text-primary-foreground disabled:opacity-40">Add note</button>
+          <button onClick={add} disabled={!val.trim() || adding} className="inline-flex items-center gap-1 rounded bg-primary px-2 py-1 text-[10px] font-semibold text-primary-foreground disabled:opacity-40">
+            {adding && <Loader2 className="h-3 w-3 animate-spin" />}
+            Add note
+          </button>
         </div>
       </div>
       <div className="mt-2 space-y-1.5">
         {notes.length === 0 && <div className="text-[11px] text-muted-foreground">No notes yet.</div>}
         {notes.map((n) => (
-          <div key={n.id} className="rounded-md border border-border bg-background px-2.5 py-2 text-xs">
+          <div key={n.id} className="group rounded-md border border-border bg-background px-2.5 py-2 text-xs">
             <div className="mb-1 flex items-center justify-between">
               <span className="text-[10px] font-semibold text-foreground/80">{n.author} <span className="font-normal text-muted-foreground">· {n.when}</span></span>
-              {canEdit(n) && (
-                <div className="flex items-center gap-0.5">
-                  <button onClick={() => { setEditingId(n.id); setEditVal(n.text); }} className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"><Pencil className="h-3 w-3" /></button>
-                  <button onClick={() => setNotes(notes.filter((x) => x.id !== n.id))} className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-danger"><Trash2 className="h-3 w-3" /></button>
-                </div>
-              )}
+              <button
+                onClick={() => remove(n.id)}
+                disabled={deletingId === n.id}
+                className="opacity-0 group-hover:opacity-100 transition-opacity rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-destructive disabled:opacity-50"
+              >
+                {deletingId === n.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+              </button>
             </div>
-            {editingId === n.id ? (
-              <div>
-                <textarea value={editVal} onChange={(e) => setEditVal(e.target.value)} rows={2} className="w-full resize-none rounded border border-border bg-background px-2 py-1 text-xs focus:outline-none" />
-                <div className="mt-1 flex justify-end gap-1">
-                  <button onClick={() => setEditingId(null)} className="rounded px-2 py-0.5 text-[10px] text-muted-foreground hover:bg-muted">Cancel</button>
-                  <button onClick={() => { setNotes(notes.map((x) => x.id === n.id ? { ...x, text: editVal } : x)); setEditingId(null); }} className="rounded bg-primary px-2 py-0.5 text-[10px] font-semibold text-primary-foreground">Save</button>
-                </div>
-              </div>
-            ) : (
-              <p className="leading-relaxed text-foreground/80">{n.text}</p>
-            )}
+            <p className="leading-relaxed text-foreground/80">{n.text}</p>
           </div>
         ))}
       </div>
