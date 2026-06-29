@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import type { Customer, CustomerNote } from "@/lib/mock-data";
-import { getMcpResponse, mcpPrompts, platformIncidents, tagLibrary } from "@/lib/mock-data";
+import { platformIncidents, tagLibrary } from "@/lib/mock-data";
 import { toast } from "sonner";
+import { api } from "@/lib/api";
 import {
   TrendingUp, TrendingDown, Minus, AlertTriangle, CheckCircle2, XCircle,
   Mail, Globe, Zap, CreditCard, ExternalLink, BarChart3, Sparkles,
@@ -17,12 +18,13 @@ const CURRENT_AGENT = { id: "me", name: "Riley Park", isAdmin: false };
 type AssignedAgent = { id: string; name: string; assignedById: string; assignedByName: string; assignedAt: string } | null | undefined;
 type IntercomAssignee = { id: string | number; name?: string; email?: string; type?: string } | null | undefined;
 
-export function CustomerPanel({ customer, clickupTicket, conversationTags, assignedAgent, intercomAssignee }: {
+export function CustomerPanel({ customer, clickupTicket, conversationTags, assignedAgent, intercomAssignee, conversationId }: {
   customer: Customer;
   clickupTicket?: string;
   conversationTags?: { id: string; name: string }[];
   assignedAgent?: AssignedAgent;
   intercomAssignee?: IntercomAssignee;
+  conversationId?: string;
 }) {
   const [tags, setTags] = useState<string[]>(customer.tags);
   const [notes, setNotes] = useState<CustomerNote[]>(customer.notes);
@@ -36,11 +38,11 @@ export function CustomerPanel({ customer, clickupTicket, conversationTags, assig
       <Products customer={customer} />
       <Destinations customer={customer} />
       <AccountHealth customer={customer} />
-      <SentimentRisk customer={customer} />
+      <SentimentRisk customer={customer} conversationId={conversationId} />
       <Notes notes={notes} setNotes={setNotes} />
       <PastConvos customer={customer} />
-      <McpConsole customer={customer} />
-      <QuickLinks customer={customer} />
+      <McpConsole customer={customer} conversationId={conversationId} />
+      <QuickLinks customer={customer} conversationId={conversationId} />
     </aside>
   );
 }
@@ -340,25 +342,72 @@ function AccountHealth({ customer }: { customer: Customer }) {
   );
 }
 
-function SentimentRisk({ customer }: { customer: Customer }) {
+type SentimentData = {
+  sentiment: 'positive' | 'neutral' | 'negative';
+  sentimentReason: string;
+  churnRisk: 'low' | 'medium' | 'high';
+  churnReason: string;
+  suggestedAction: string;
+};
+
+function SentimentRisk({ customer, conversationId }: { customer: Customer; conversationId?: string }) {
+  const [data, setData] = useState<SentimentData | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!conversationId) return;
+    setData(null);
+    setLoading(true);
+    api.ai.sentiment(conversationId)
+      .then((res: any) => setData(res?.data ?? null))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [conversationId]);
+
+  const sentiment = data?.sentiment ?? customer.sentiment;
+  const sentimentReason = data?.sentimentReason ?? customer.sentimentReason;
+  const churnRisk = data?.churnRisk ?? customer.churn;
+  const suggestedAction = data?.suggestedAction ?? customer.suggestedAction;
+
   return (
     <Section title="Sentiment & Risk">
-      <div className="flex items-center justify-between">
-        <span className="text-xs text-muted-foreground">AI sentiment</span>
-        <SentimentBadge s={customer.sentiment} />
-      </div>
-      <p className="mt-2 rounded-md border border-border bg-background px-2.5 py-2 text-xs leading-relaxed text-foreground/80">
-        <Sparkles className="mr-1 inline h-3 w-3 text-primary" />
-        {customer.sentimentReason}
-      </p>
-      <div className="mt-3 flex items-center justify-between">
-        <span className="text-xs text-muted-foreground">Churn risk</span>
-        <ChurnBadge risk={customer.churn} />
-      </div>
-      <div className="mt-2 rounded-md border border-primary/30 bg-primary/5 px-2.5 py-2 text-[11px] leading-relaxed">
-        <span className="font-semibold text-primary">Suggested next action: </span>
-        <span className="text-foreground/85">{customer.suggestedAction}</span>
-      </div>
+      {loading ? (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-muted-foreground">AI sentiment</span>
+            <div className="h-5 w-16 animate-pulse rounded-md bg-muted" />
+          </div>
+          <div className="h-10 animate-pulse rounded-md bg-muted" />
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-muted-foreground">Churn risk</span>
+            <div className="h-5 w-12 animate-pulse rounded-md bg-muted" />
+          </div>
+          <div className="h-9 animate-pulse rounded-md bg-muted" />
+        </div>
+      ) : (
+        <>
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-muted-foreground">AI sentiment</span>
+            <SentimentBadge s={sentiment} />
+          </div>
+          {sentimentReason ? (
+            <p className="mt-2 rounded-md border border-border bg-background px-2.5 py-2 text-xs leading-relaxed text-foreground/80">
+              <Sparkles className="mr-1 inline h-3 w-3 text-primary" />
+              {sentimentReason}
+            </p>
+          ) : null}
+          <div className="mt-3 flex items-center justify-between">
+            <span className="text-xs text-muted-foreground">Churn risk</span>
+            <ChurnBadge risk={churnRisk} />
+          </div>
+          {suggestedAction ? (
+            <div className="mt-2 rounded-md border border-primary/30 bg-primary/5 px-2.5 py-2 text-[11px] leading-relaxed">
+              <span className="font-semibold text-primary">Suggested next action: </span>
+              <span className="text-foreground/85">{suggestedAction}</span>
+            </div>
+          ) : null}
+        </>
+      )}
     </Section>
   );
 }
@@ -453,14 +502,35 @@ function PastConvos({ customer }: { customer: Customer }) {
   );
 }
 
-function McpConsole({ customer }: { customer: Customer }) {
+function McpConsole({ customer, conversationId }: { customer: Customer; conversationId?: string }) {
   const [q, setQ] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<string[] | null>(null);
-  const ask = (text?: string) => {
+  const [hints, setHints] = useState<string[]>([]);
+  const [hintsLoading, setHintsLoading] = useState(false);
+
+  useEffect(() => {
+    if (!conversationId) return;
+    setHints([]);
+    setHintsLoading(true);
+    api.ai.diagnoseHints(conversationId)
+      .then((res: any) => setHints(res?.data?.hints ?? []))
+      .catch(() => {})
+      .finally(() => setHintsLoading(false));
+  }, [conversationId]);
+
+  const ask = async (text?: string) => {
     const query = (text ?? q).trim(); if (!query) return;
+    if (!conversationId) { toast.error("No conversation selected"); return; }
     setQ(query); setLoading(true); setResult(null);
-    setTimeout(() => { setResult(getMcpResponse(query, customer)); setLoading(false); }, 900);
+    try {
+      const res = await api.ai.diagnose(conversationId, query);
+      setResult(res?.data?.diagnostics ?? []);
+    } catch {
+      toast.error("Diagnostic failed — try again");
+    } finally {
+      setLoading(false);
+    }
   };
   return (
     <Section title="MCP Diagnostic">
@@ -473,9 +543,15 @@ function McpConsole({ customer }: { customer: Customer }) {
           <button onClick={() => ask()} className="inline-flex h-6 w-6 items-center justify-center rounded bg-primary text-primary-foreground hover:bg-primary/90"><ArrowRight className="h-3 w-3" /></button>
         </div>
         <div className="mt-2 flex flex-wrap gap-1">
-          {mcpPrompts.slice(0, 3).map((p) => (
-            <button key={p} onClick={() => ask(p)} className="rounded-full border border-border bg-background px-2 py-0.5 text-[10px] text-muted-foreground transition hover:border-primary/40 hover:text-foreground">{p}</button>
-          ))}
+          {hintsLoading ? (
+            <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+              <Loader2 className="h-2.5 w-2.5 animate-spin" />Analyzing conversation…
+            </div>
+          ) : hints.length > 0 ? (
+            hints.map((p) => (
+              <button key={p} onClick={() => ask(p)} className="rounded-full border border-border bg-background px-2 py-0.5 text-[10px] text-muted-foreground transition hover:border-primary/40 hover:text-foreground">{p}</button>
+            ))
+          ) : null}
         </div>
         {(loading || result) && (
           <div className="mt-2 rounded-md border border-border bg-background p-2.5 text-xs">
@@ -493,14 +569,31 @@ function McpConsole({ customer }: { customer: Customer }) {
   );
 }
 
-function QuickLinks({ customer }: { customer: Customer }) {
-  const onLogin = () => toast.success(`Issued one-click login token for ${customer.name} (15-min validity). Logged.`);
+function QuickLinks({ customer, conversationId }: { customer: Customer; conversationId?: string }) {
+  const [loginLoading, setLoginLoading] = useState(false);
+  const onLogin = async () => {
+    if (!conversationId) return toast.error("No conversation selected");
+    if (loginLoading) return;
+    setLoginLoading(true);
+    try {
+      const res = await api.conversations.oneClickLogin(conversationId);
+      window.open(res.data.url, '_blank', 'noopener,noreferrer');
+      toast.success(`Opened session as ${res.data.customerEmail}`);
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to generate login link');
+    } finally {
+      setLoginLoading(false);
+    }
+  };
   const onStripe = () => toast.success(`Opening Stripe customer page in new tab. Logged.`);
   return (
     <Section title="Quick Links" last>
-      <button onClick={onLogin} className="group flex w-full items-center justify-between rounded-md border border-border bg-background px-2.5 py-2 text-xs font-medium transition hover:border-primary/40 hover:bg-primary/5">
-        <span className="flex items-center gap-2 text-foreground/85"><ExternalLink className="h-3.5 w-3.5 text-primary" />One-Click Login</span>
-        <ArrowRight className="h-3 w-3 text-muted-foreground group-hover:translate-x-0.5 group-hover:text-primary" />
+      <button onClick={onLogin} disabled={loginLoading} className="group flex w-full items-center justify-between rounded-md border border-border bg-background px-2.5 py-2 text-xs font-medium transition hover:border-primary/40 hover:bg-primary/5 disabled:opacity-60">
+        <span className="flex items-center gap-2 text-foreground/85">
+          {loginLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" /> : <ExternalLink className="h-3.5 w-3.5 text-primary" />}
+          {loginLoading ? "Opening…" : "One-Click Login"}
+        </span>
+        {!loginLoading && <ArrowRight className="h-3 w-3 text-muted-foreground group-hover:translate-x-0.5 group-hover:text-primary" />}
       </button>
       {customer.loginAudit && (
         <div className="mt-1 flex items-center gap-1 px-1 text-[10px] text-muted-foreground">

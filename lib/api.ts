@@ -218,6 +218,33 @@ export const api = {
     list: () => apiFetch('/alerts'),
   },
 
+  ai: {
+    compose: (conversationId: string, draft: string, mode: 'rephrase' | 'formal' | 'friendly' | 'concise' | 'expand' | 'translate', targetLanguage?: string) =>
+      apiFetch('/ai/compose', { method: 'POST', body: JSON.stringify({ conversationId, draft, mode, targetLanguage }) }),
+    summarize: (conversationId: string) =>
+      apiFetch('/ai/summarize', { method: 'POST', body: JSON.stringify({ conversationId }) }),
+    suggest: (conversationId: string) =>
+      apiFetch('/ai/suggest', { method: 'POST', body: JSON.stringify({ conversationId }) }),
+    suggestMacros: (conversationId: string) =>
+      apiFetch('/ai/suggest-macros', { method: 'POST', body: JSON.stringify({ conversationId }) }),
+    suggestArticles: (conversationId: string) =>
+      apiFetch('/ai/suggest-articles', { method: 'POST', body: JSON.stringify({ conversationId }) }),
+    autoTag: (conversationId: string) =>
+      apiFetch('/ai/auto-tag', { method: 'POST', body: JSON.stringify({ conversationId }) }),
+    applyTags: (conversationId: string, tagIds: string[]) =>
+      apiFetch('/ai/apply-tags', { method: 'POST', body: JSON.stringify({ conversationId, tagIds }) }),
+    chat: (conversationId: string, message: string, history?: { role: string; content: string }[]) =>
+      apiFetch('/ai/chat', { method: 'POST', body: JSON.stringify({ conversationId, message, history }) }),
+    insights: (days = 7) =>
+      apiFetch(`/ai/insights?days=${days}`),
+    diagnose: (conversationId: string, query: string) =>
+      apiFetch('/ai/diagnose', { method: 'POST', body: JSON.stringify({ conversationId, query }) }),
+    diagnoseHints: (conversationId: string) =>
+      apiFetch('/ai/diagnose-hints', { method: 'POST', body: JSON.stringify({ conversationId }) }),
+    sentiment: (conversationId: string) =>
+      apiFetch('/ai/sentiment', { method: 'POST', body: JSON.stringify({ conversationId }) }),
+  },
+
   sseUrl: () => {
     const token = getToken();
     return `${API_BASE}/api/v1/events${token ? `?token=${encodeURIComponent(token)}` : ''}`;

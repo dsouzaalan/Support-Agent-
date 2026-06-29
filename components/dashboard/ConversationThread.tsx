@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import type { Conversation, ConvStatus, Message, MessageAttachment } from "@/lib/mock-data";
-import { suggestedMcp, getMcpResponse } from "@/lib/mock-data";
+import { suggestedMcp } from "@/lib/mock-data";
 import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -11,8 +11,10 @@ import {
   Sparkles, SendHorizonal, Wand2, ExternalLink,
   AlertTriangle, CheckCheck, MoreHorizontal, UserPlus, Languages,
   BookOpen, FileText, Clock, Stethoscope, StickyNote, AtSign, CreditCard,
-  ClipboardList, RotateCcw, Keyboard, Paperclip, Tag, X, Plus, Loader2, BellOff, LogIn,
+  ClipboardList, RotateCcw, Keyboard, Paperclip, Tag, X, Plus, Loader2, BellOff,
+  Bot, ChevronDown,
 } from "lucide-react";
+import { AiCopilotPanel } from "./AiCopilotPanel";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 
@@ -26,6 +28,7 @@ const DRAFTS: Record<string, string> = {
 };
 
 const LANG_LABELS: Record<string, string> = { en: "English", de: "Deutsch", fr: "Français", es: "Español" };
+const LANG_ENGLISH: Record<string, string> = { en: "English", de: "German", fr: "French", es: "Spanish" };
 const AGENT_LANG = "en";
 
 interface ThreadProps {
@@ -79,10 +82,12 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
   const [aiThinking, setAiThinking] = useState(false);
   const [toneCheck, setToneCheck] = useState<null | { tone: string; suggestion: string }>(null);
   const [translatePreview, setTranslatePreview] = useState<null | { lang: string; text: string }>(null);
+  const [translating, setTranslating] = useState(false);
   const [showTranslated, setShowTranslated] = useState<Record<string, boolean>>({});
   const [showCanned, setShowCanned] = useState(false);
   const [showArticles, setShowArticles] = useState(false);
   const [mcpResult, setMcpResult] = useState<string[] | null>(null);
+  const [mcpLoading, setMcpLoading] = useState(false);
   const [showNote, setShowNote] = useState(false);
   const [noteVal, setNoteVal] = useState("");
   const [localMessages, setLocalMessages] = useState<Message[]>(conversation.messages);
@@ -97,7 +102,14 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
   const [agentList, setAgentList] = useState<{ id: string; name: string }[]>([]);
   const [agentListLoading, setAgentListLoading] = useState(false);
   const [assigning, setAssigning] = useState(false);
-  const [loginLoading, setLoginLoading] = useState(false);
+  // AI features
+  const [showCopilot, setShowCopilot] = useState(false);
+  const [aiSuggestions, setAiSuggestions] = useState<Array<{ type: string; body?: string; macroId?: string; macroName?: string }>>([]);
+  const [showSuggestions, setShowSuggestions] = useState(true);
+  const [aiTagSuggestions, setAiTagSuggestions] = useState<Array<{ id: string; name: string }>>([]);
+  const [showTagBanner, setShowTagBanner] = useState(false);
+  const [showComposeMenu, setShowComposeMenu] = useState(false);
+  const [composing, setComposing] = useState(false);
   const [localAssignedAgent, setLocalAssignedAgent] = useState(conversation.assignedAgent ?? null);
 
   // Tags
@@ -281,8 +293,16 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
           if (!draftRef.current.trim()) { toast.error("Write a reply first"); return; }
           (() => {
             const lang = conversationRef.current.customer.language;
-            if (lang === AGENT_LANG) { toast(`Customer language matches yours.`); return; }
-            setTranslatePreview({ lang, text: `[${LANG_LABELS[lang]} translation] ${draftRef.current}` });
+            if (!lang || lang === AGENT_LANG) { toast(`Customer language matches yours.`); return; }
+            const langName = LANG_ENGLISH[lang] || lang;
+            setTranslating(true);
+            api.ai.compose(conversationRef.current.id, draftRef.current, 'translate', langName)
+              .then((res: any) => {
+                const translated = res?.data?.result;
+                if (translated) setTranslatePreview({ lang, text: translated });
+              })
+              .catch((err: any) => toast.error(err.message || "Translation failed"))
+              .finally(() => setTranslating(false));
           })();
           break;
         case "n":
@@ -309,19 +329,76 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
   const slaLeft = isWaiting ? Math.max(0, conversation.slaMinutes - conversation.waitMinutes) : null;
   const slaTone = slaLeft === null ? "text-muted-foreground" : slaLeft === 0 ? "text-danger" : slaLeft < 5 ? "text-danger" : slaLeft < 15 ? "text-warning" : "text-muted-foreground";
 
-  const autoFill = () => {
+  const autoFill = async () => {
     setAiThinking(true); setToneCheck(null);
-    setTimeout(() => { setDraft(DRAFTS[conversation.id] || "Thanks for reaching out — looking into this now."); setAiThinking(false); }, 800);
+    try {
+      const res = await api.ai.suggest(conversation.id);
+      const suggestions: any[] = res?.data?.suggestions ?? [];
+      const first = suggestions.find((s: any) => s.type === 'text');
+      if (first?.body) {
+        setDraft(first.body);
+        setAiSuggestions(suggestions.slice(1));
+      } else {
+        toast("No AI suggestion available for this conversation.");
+      }
+    } catch {
+      setDraft(DRAFTS[conversation.id] || "Thanks for reaching out — looking into this now.");
+    } finally {
+      setAiThinking(false);
+    }
   };
+
+  const runCompose = async (mode: 'rephrase' | 'formal' | 'friendly' | 'concise' | 'expand') => {
+    if (!draft.trim()) return toast.error("Write a draft first");
+    setShowComposeMenu(false); setComposing(true);
+    try {
+      const res = await api.ai.compose(conversation.id, draft, mode);
+      if (res?.data?.result) setDraft(res.data.result);
+    } catch (err: any) {
+      toast.error(err.message || "Compose failed");
+    } finally {
+      setComposing(false);
+    }
+  };
+
   const runToneCheck = () => {
     if (!draft.trim()) return toast.error("Write a reply first");
-    setToneCheck({ tone: "Professional · Empathetic", suggestion: "Consider opening with the customer's name to warm the tone." });
+    setShowComposeMenu(v => !v);
   };
-  const translateReply = () => {
+
+  // Load AI suggestions + auto-tag when conversation changes
+  useEffect(() => {
+    setAiSuggestions([]);
+    setShowSuggestions(true);
+    setAiTagSuggestions([]);
+    setShowTagBanner(false);
+
+    api.ai.suggest(conversation.id)
+      .then((res: any) => setAiSuggestions(res?.data?.suggestions ?? []))
+      .catch(() => {});
+
+    api.ai.autoTag(conversation.id)
+      .then((res: any) => {
+        const tags: Array<{ id: string; name: string }> = res?.data?.tags ?? [];
+        if (tags.length) { setAiTagSuggestions(tags); setShowTagBanner(true); }
+      })
+      .catch(() => {});
+  }, [conversation.id]);
+  const translateReply = async () => {
     if (!draft.trim()) return toast.error("Write a reply first");
     const lang = conversation.customer.language;
-    if (lang === AGENT_LANG) return toast(`Customer language matches yours (${LANG_LABELS[lang]}).`);
-    setTranslatePreview({ lang, text: `[${LANG_LABELS[lang]} translation] ${draft}` });
+    if (!lang || lang === AGENT_LANG) return toast(`Customer language matches yours.`);
+    const langName = LANG_ENGLISH[lang] || lang;
+    setTranslating(true);
+    try {
+      const res = await api.ai.compose(conversation.id, draft, 'translate', langName);
+      const translated = res?.data?.result;
+      if (translated) setTranslatePreview({ lang, text: translated });
+    } catch (err: any) {
+      toast.error(err.message || "Translation failed");
+    } finally {
+      setTranslating(false);
+    }
   };
   const send = async () => {
     if ((!draft.trim() && !attachedFiles.length) || sending) return;
@@ -495,9 +572,17 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
-  const runMcp = () => {
+  const runMcp = async () => {
     if (!suggested) return;
-    setMcpResult(getMcpResponse(suggested, conversation.customer));
+    setMcpLoading(true);
+    try {
+      const res = await api.ai.diagnose(conversation.id, suggested);
+      setMcpResult(res?.data?.diagnostics ?? []);
+    } catch {
+      toast.error("Diagnostic failed — try again");
+    } finally {
+      setMcpLoading(false);
+    }
   };
   const insertMcpIntoReply = () => {
     if (!mcpResult) return;
@@ -530,7 +615,10 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
   };
 
   return (
-    <section className="flex h-full min-w-0 flex-1 flex-col bg-background">
+    <>
+    <section className="flex h-full min-w-0 flex-1 bg-background overflow-hidden">
+    {/* Main thread column */}
+    <div className="flex flex-1 min-w-0 flex-col h-full">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border bg-card px-4 py-3 md:px-6">
         <div className="min-w-0">
@@ -869,26 +957,6 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
               <CheckCheck className="h-4 w-4" />
             </IconBtn>
           ))}
-          {can('conversations:one_click_login') && (
-            <IconBtn
-              label="Login as Customer"
-              onClick={async () => {
-                if (loginLoading) return;
-                setLoginLoading(true);
-                try {
-                  const res = await api.conversations.oneClickLogin(conversation.id);
-                  window.open(res.data.url, '_blank', 'noopener,noreferrer');
-                  toast.success(`Opened session as ${res.data.customerEmail}`);
-                } catch (err: any) {
-                  toast.error(err.message || 'Failed to generate login link');
-                } finally {
-                  setLoginLoading(false);
-                }
-              }}
-            >
-              {loginLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}
-            </IconBtn>
-          )}
           <IconBtn label="More"><MoreHorizontal className="h-4 w-4" /></IconBtn>
         </div>
       </div>
@@ -908,6 +976,28 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
         </div>
       )}
 
+      {/* Auto-tag banner */}
+      {showTagBanner && aiTagSuggestions.length > 0 && (
+        <div className="flex items-center gap-2 border-b border-violet-200 bg-violet-50 px-4 py-2 text-xs dark:border-violet-900/40 dark:bg-violet-900/10 md:px-6">
+          <Sparkles className="h-3.5 w-3.5 shrink-0 text-violet-500" />
+          <span className="text-violet-700 dark:text-violet-300">AI suggested tags:</span>
+          {aiTagSuggestions.map(t => (
+            <span key={t.id} className="rounded-full bg-violet-100 px-2 py-0.5 font-medium text-violet-700 dark:bg-violet-900/40 dark:text-violet-300">{t.name}</span>
+          ))}
+          <button
+            onClick={async () => {
+              try {
+                await api.ai.applyTags(conversation.id, aiTagSuggestions.map(t => t.id));
+                toast.success("Tags applied");
+                setShowTagBanner(false);
+              } catch (err: any) { toast.error(err.message); }
+            }}
+            className="ml-auto rounded-md bg-violet-600 px-2 py-0.5 font-medium text-white hover:bg-violet-700"
+          >Apply</button>
+          <button onClick={() => setShowTagBanner(false)} className="text-muted-foreground hover:text-foreground"><X className="h-3 w-3" /></button>
+        </div>
+      )}
+
       {/* Suggested diagnostic */}
       {suggested && (
         <div className="border-b border-border bg-primary/5 px-4 py-2 md:px-6">
@@ -917,9 +1007,10 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
             <div className="ml-auto flex shrink-0 items-center gap-1">
               <button
                 onClick={mcpResult ? () => setMcpResult(null) : runMcp}
-                className="rounded-md bg-primary px-2 py-0.5 text-[11px] font-semibold text-primary-foreground hover:bg-primary/90"
+                disabled={mcpLoading}
+                className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-0.5 text-[11px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
               >
-                {mcpResult ? "Close" : "Run"}
+                {mcpLoading ? <><Loader2 className="h-3 w-3 animate-spin" />Running…</> : mcpResult ? "Close" : "Run"}
               </button>
             </div>
           </div>
@@ -1150,6 +1241,40 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
             </div>
           </>
         )}
+        {/* AI suggestions chips */}
+        {aiSuggestions.length > 0 && showSuggestions && (
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {aiSuggestions.map((s, i) => (
+              <button
+                key={i}
+                onClick={() => { if (s.type === 'text' && s.body) setDraft(s.body); setShowSuggestions(false); }}
+                className="flex items-center gap-1 rounded-full border border-primary/30 bg-primary/5 px-2.5 py-1 text-[11px] text-primary hover:bg-primary/10 max-w-[240px] truncate"
+              >
+                <Sparkles className="h-3 w-3 shrink-0" />
+                {s.type === 'macro' ? `Apply: ${s.macroName}` : s.body?.slice(0, 60)}
+              </button>
+            ))}
+            <button onClick={() => setShowSuggestions(false)} title="Hide suggestions" className="rounded-full px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted"><X className="h-3 w-3" /></button>
+          </div>
+        )}
+
+        {/* Compose mode picker */}
+        {showComposeMenu && (
+          <div className="mb-2 flex items-center gap-1 flex-wrap">
+            {(['rephrase', 'formal', 'friendly', 'concise', 'expand'] as const).map(mode => (
+              <button
+                key={mode}
+                onClick={() => runCompose(mode)}
+                disabled={composing}
+                className="rounded-full border border-border px-2.5 py-1 text-[11px] capitalize hover:bg-muted disabled:opacity-50"
+              >
+                {composing ? <Loader2 className="h-3 w-3 animate-spin" /> : mode}
+              </button>
+            ))}
+            <button onClick={() => setShowComposeMenu(false)} className="rounded-full px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted"><X className="h-3 w-3" /></button>
+          </div>
+        )}
+
         {toneCheck && (
           <div className="mb-2 flex items-start gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs">
             <Sparkles className="mt-0.5 h-3.5 w-3.5 text-primary" />
@@ -1211,8 +1336,17 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
                   {aiThinking ? <><Sparkles className="h-3.5 w-3.5 animate-pulse text-primary" /> Drafting…</> : <><Sparkles className="h-3.5 w-3.5 text-primary" /> Auto-Fill</>}
                 </ComposerBtn>
               )}
-              {can('conversations:reply') && <ComposerBtn onClick={runToneCheck}><Wand2 className="h-3.5 w-3.5" /> Tone</ComposerBtn>}
-              {can('conversations:reply') && <ComposerBtn onClick={translateReply}><Languages className="h-3.5 w-3.5" /> Translate</ComposerBtn>}
+              {can('conversations:reply') && aiSuggestions.length > 0 && !showSuggestions && (
+                <ComposerBtn onClick={() => setShowSuggestions(true)} title="Show AI suggestions">
+                  <Sparkles className="h-3.5 w-3.5 text-primary" /> Suggestions
+                </ComposerBtn>
+              )}
+              {can('conversations:reply') && <ComposerBtn onClick={runToneCheck}><Wand2 className="h-3.5 w-3.5" /> Compose</ComposerBtn>}
+              {can('conversations:reply') && (
+                <ComposerBtn onClick={translateReply} disabled={translating}>
+                  {translating ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Translating…</> : <><Languages className="h-3.5 w-3.5" /> Translate</>}
+                </ComposerBtn>
+              )}
               {can('macros:apply') && <ComposerBtn onClick={() => { setShowCanned(!showCanned); setShowArticles(false); }}><FileText className="h-3.5 w-3.5" /> Macros</ComposerBtn>}
               {can('articles:view') && <ComposerBtn onClick={() => { setShowArticles(!showArticles); setShowCanned(false); }}><BookOpen className="h-3.5 w-3.5" /> Articles</ComposerBtn>}
               {can('notes:create') && <ComposerBtn onClick={() => setShowNote(true)}><StickyNote className="h-3.5 w-3.5 text-warning" /> Note</ComposerBtn>}
@@ -1360,7 +1494,46 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
         existingTaskUrl={clickupTaskUrl}
         onCreated={(ticket, taskUrl) => { onLinkClickup?.(ticket, taskUrl); setClickupOpen(false); toast.success(`Created ${ticket} in ClickUp`); }}
       />
+    </div>
+
     </section>
+
+    {/* Floating AI Copilot bubble — fixed bottom-right, outside overflow-hidden section */}
+    <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3">
+      {showCopilot && (
+        <div
+          className="w-[380px] overflow-hidden rounded-2xl shadow-2xl"
+          style={{ height: 520, animation: "copilotSlideIn 0.2s ease" }}
+        >
+          <AiCopilotPanel
+            conversationId={conversation.id}
+            onUseDraft={(text) => setDraft(text)}
+            onClose={() => setShowCopilot(false)}
+          />
+        </div>
+      )}
+      <button
+        onClick={() => setShowCopilot(v => !v)}
+        className={cn(
+          "flex h-14 w-14 items-center justify-center rounded-full shadow-xl transition-all duration-200 hover:scale-105 active:scale-95",
+          showCopilot
+            ? "bg-gradient-to-br from-indigo-600 to-violet-700 ring-4 ring-indigo-400/30"
+            : "bg-gradient-to-br from-indigo-500 to-violet-600 ring-4 ring-transparent hover:ring-indigo-400/30"
+        )}
+        title="AI Copilot"
+      >
+        {showCopilot
+          ? <X className="h-6 w-6 text-white" />
+          : <Sparkles className="h-6 w-6 text-white" />}
+      </button>
+    </div>
+    <style>{`
+      @keyframes copilotSlideIn {
+        from { opacity: 0; transform: translateY(12px) scale(0.97); }
+        to   { opacity: 1; transform: translateY(0) scale(1); }
+      }
+    `}</style>
+    </>
   );
 }
 

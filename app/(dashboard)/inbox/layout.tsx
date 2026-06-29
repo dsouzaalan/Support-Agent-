@@ -104,6 +104,7 @@ function InboxContent({ children }: { children: React.ReactNode }) {
             conversationTags={selectedConversation.tags}
             assignedAgent={selectedConversation.assignedAgent}
             intercomAssignee={selectedConversation.intercomAssignee}
+            conversationId={selectedConversation.id}
           />
         </div>
       ) : selectedId === "new" ? (
