@@ -456,7 +456,18 @@ const ACTION_STYLES: Record<string, string> = {
   ARTICLE_DELETED:          "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
 };
 
-const ALL_ACTIONS = Object.keys(ACTION_STYLES);
+// STATUS_CHANGED is split into individual status filter options; exclude it from the flat list
+const ALL_ACTIONS = Object.keys(ACTION_STYLES).filter(a => a !== "STATUS_CHANGED");
+
+// Virtual filter keys for per-status filtering (mapped to action=STATUS_CHANGED + metadataStatus=X at the API layer)
+const STATUS_FILTER_OPTIONS = [
+  { value: "__STATUS_closed",  label: "Status: closed" },
+  { value: "__STATUS_open",    label: "Status: open" },
+  { value: "__STATUS_pending", label: "Status: pending" },
+];
+
+function isStatusFilter(action: string) { return action.startsWith("__STATUS_"); }
+function statusFilterValue(action: string) { return action.replace("__STATUS_", ""); }
 
 function actionLabel(action: string): string {
   return action.replace(/_/g, " ").toLowerCase().replace(/^\w/, c => c.toUpperCase());
@@ -473,7 +484,7 @@ function MetaDetails({ log }: { log: AuditLogRow }) {
   if (log.action === "AGENT_ROLE_CHANGED")        { summary = `${m?.from} → ${m?.to}`; }
   else if (log.action === "AGENT_STATUS_CHANGED") { summary = `${m?.from} → ${m?.to}`; }
   else if (log.action === "AGENT_PERMISSION_CHANGED") { summary = `${m?.key}: ${m?.granted ? "granted" : "revoked"}`; }
-  else if (log.action === "STATUS_CHANGED")       { summary = m?.status ?? ""; }
+  else if (log.action === "STATUS_CHANGED")       { summary = ""; }
   else if (log.action === "CLICKUP_TASK_CREATED") { summary = m?.taskUrl ? "Task created" : ""; }
   else if (log.action === "MACRO_APPLIED") {
     icon = <Wand2 className="h-3 w-3 shrink-0 text-muted-foreground" />;
@@ -554,10 +565,19 @@ export function AuditView() {
 
   const fetchLogs = useCallback(() => {
     setLoading(true);
+    // Translate virtual __STATUS_X keys to action=STATUS_CHANGED + metadataStatus=X
+    const apiAction = action
+      ? isStatusFilter(action) ? "STATUS_CHANGED" : action
+      : undefined;
+    const apiMetadataStatus = action && isStatusFilter(action)
+      ? statusFilterValue(action)
+      : undefined;
+
     api.auditLogs
       .list({
         agentId: agentId || undefined,
-        action: action || undefined,
+        action: apiAction,
+        metadataStatus: apiMetadataStatus,
         from: from || undefined,
         to: to ? `${to}T23:59:59` : undefined,
         page,
@@ -580,10 +600,17 @@ export function AuditView() {
   useSSE({
     onAuditLogNew: useCallback((log: AuditLogRow) => {
       const f = filtersRef.current;
-      // Only prepend if we're on page 1 and the new log matches active filters
       if (f.page !== 1) return;
       if (f.agentId && log.agentId !== f.agentId) return;
-      if (f.action  && log.action  !== f.action)  return;
+      if (f.action) {
+        if (isStatusFilter(f.action)) {
+          // Virtual status filter: check action=STATUS_CHANGED and metadata.status matches
+          if (log.action !== "STATUS_CHANGED") return;
+          if (log.metadata?.status !== statusFilterValue(f.action)) return;
+        } else {
+          if (log.action !== f.action) return;
+        }
+      }
       if (f.from && new Date(log.createdAt) < new Date(f.from)) return;
       if (f.to   && new Date(log.createdAt) > new Date(`${f.to}T23:59:59`)) return;
 
@@ -636,6 +663,9 @@ export function AuditView() {
             className="rounded-md border border-border bg-background px-2 py-1.5 text-xs focus:outline-none"
           >
             <option value="">All actions</option>
+            {STATUS_FILTER_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
             {ALL_ACTIONS.map((a) => (
               <option key={a} value={a}>{actionLabel(a)}</option>
             ))}
@@ -687,6 +717,7 @@ export function AuditView() {
                 <th className="px-4 py-2.5 text-left font-semibold">Action</th>
                 <th className="px-4 py-2.5 text-left font-semibold">Target</th>
                 <th className="px-4 py-2.5 text-left font-semibold">Details</th>
+                <th className="w-32 px-4 py-2.5 text-left font-semibold">Sentiment</th>
               </tr>
             </thead>
             <tbody>
@@ -701,31 +732,43 @@ export function AuditView() {
                   </td>
                   <td className="px-4 py-2.5">
                     <span className={cn("inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide", ACTION_STYLES[log.action] ?? "bg-muted text-muted-foreground")}>
-                      {actionLabel(log.action)}
+                      {log.action === "STATUS_CHANGED" && log.metadata?.status
+                        ? log.metadata.status
+                        : actionLabel(log.action)}
                     </span>
                   </td>
                   <td className="px-4 py-2.5 max-w-[200px]">
-                    {log.targetName || log.targetId ? (
-                      <>
-                        <div className="font-medium truncate" title={log.targetName ?? log.targetId ?? ""}>
-                          {log.targetName ?? log.targetId}
-                        </div>
-                        {log.targetType && (
-                          <div className="text-[10px] text-muted-foreground uppercase">{log.targetType}</div>
-                        )}
-                        {/* Show conversation ID as secondary reference when subject is shown */}
-                        {log.targetName && log.targetId && log.targetType === "CONVERSATION" && (
-                          <div className="font-mono text-[10px] text-muted-foreground/60">
-                            #{log.targetId.slice(-8)}
-                          </div>
-                        )}
-                      </>
+                    {log.targetName ? (
+                      <div className="font-medium truncate" title={log.targetName}>
+                        {log.targetName}
+                      </div>
                     ) : (
                       <span className="text-muted-foreground">—</span>
                     )}
                   </td>
                   <td className="px-4 py-2.5 max-w-[280px]">
                     <MetaDetails log={log} />
+                  </td>
+                  <td className="px-4 py-2.5">
+                    {log.action === "STATUS_CHANGED" && log.metadata?.status === "closed" && log.metadata?.sentiment ? (
+                      <div>
+                        <span className={cn(
+                          "inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold capitalize",
+                          log.metadata.sentiment === "positive" && "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
+                          log.metadata.sentiment === "neutral"  && "bg-muted text-muted-foreground",
+                          log.metadata.sentiment === "negative" && "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+                        )}>
+                          {log.metadata.sentiment}
+                        </span>
+                        {log.metadata.sentimentReason && (
+                          <p className="mt-1 text-[10px] text-muted-foreground leading-snug line-clamp-2" title={log.metadata.sentimentReason}>
+                            {log.metadata.sentimentReason}
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
                   </td>
                 </tr>
               ))}

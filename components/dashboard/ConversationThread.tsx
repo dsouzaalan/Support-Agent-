@@ -12,7 +12,7 @@ import {
   AlertTriangle, CheckCheck, MoreHorizontal, UserPlus, Languages,
   BookOpen, FileText, Clock, Stethoscope, StickyNote, AtSign, CreditCard,
   ClipboardList, RotateCcw, Keyboard, Paperclip, Tag, X, Plus, Loader2, BellOff,
-  Bot, ChevronDown, Flag, Eye,
+  Bot, ChevronDown, Flag, Eye, Trash2,
 } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { AiCopilotPanel } from "./AiCopilotPanel";
@@ -150,6 +150,8 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
   const [agentListLoading, setAgentListLoading] = useState(false);
   const [assigning, setAssigning] = useState(false);
   // AI features
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [showCopilot, setShowCopilot] = useState(false);
   const [aiSuggestions, setAiSuggestions] = useState<Array<{ type: string; body?: string; macroId?: string; macroName?: string }>>([]);
   const [showSuggestions, setShowSuggestions] = useState(true);
@@ -668,6 +670,25 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
     }
   };
 
+  const handleDeleteMessage = (partId: string) => setDeleteTarget(partId);
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      await api.conversations.redactMessage(conversation.id, deleteTarget);
+      setLocalMessages((prev) => prev.map((m) =>
+        m.id === deleteTarget ? { ...m, text: "", html: "", deleted: true } : m
+      ));
+      toast.success("Message deleted.");
+      setDeleteTarget(null);
+    } catch (err: any) {
+      toast.error(err.message || "Failed to delete message");
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   return (
     <>
     <section className="flex h-full min-w-0 flex-1 bg-background overflow-hidden">
@@ -1159,14 +1180,14 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
             };
 
             return (
-              <div key={m.id} id={`msg-${m.id}`} className={cn("flex gap-2.5", isAgent && "flex-row-reverse")}>
+              <div key={m.id} id={`msg-${m.id}`} className={cn("group flex gap-2.5", isAgent && "flex-row-reverse")}>
                 <div
                   title={isAgent ? (m.author === currentUserName ? `You · ${m.author}` : (m.author || "Agent")) : conversation.customer.name}
                   className={cn("flex h-7 w-7 shrink-0 cursor-default items-center justify-center rounded-full text-[10px] font-semibold",
                     !isAgent ? "bg-gradient-to-br from-primary/80 to-primary text-primary-foreground" : "bg-foreground text-background")}>
                   {!isAgent ? conversation.customer.initials : nameInitials(m.author || "Agent")}
                 </div>
-                <div className={cn("max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed",
+                <div className={cn("relative max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed",
                   !isAgent ? "rounded-tl-sm bg-card text-foreground shadow-sm ring-1 ring-border" : "rounded-tr-sm bg-primary text-primary-foreground")}>
                   {/* Translate button — visible on all customer messages */}
                   {isCustomer && (
@@ -1187,7 +1208,12 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
                     </div>
                   )}
 
-                  {showTl && tlEntry?.text ? (
+                  {m.deleted ? (
+                    <span className={cn("flex items-center gap-1 text-xs italic", isAgent ? "text-primary-foreground/50" : "text-muted-foreground/60")}>
+                      <Trash2 className="h-3 w-3 shrink-0" />
+                      Message deleted
+                    </span>
+                  ) : showTl && tlEntry?.text ? (
                     <LinkifiedText text={tlEntry.text} isAgent={isAgent} />
                   ) : m.html ? (
                     <div
@@ -1207,6 +1233,33 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
                   <div className={cn("mt-1 flex items-center gap-1 text-[10px]", !isAgent ? "text-muted-foreground" : "text-primary-foreground/70")}>
                     <span>{m.time}</span>
                     {isAgent && m.read && <CheckCheck className="h-3 w-3" />}
+                    <span className="flex-1" />
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button className={cn("rounded p-0.5 opacity-0 group-hover:opacity-100 transition-opacity", isAgent ? "hover:bg-primary-foreground/10" : "hover:bg-muted")}>
+                          <MoreHorizontal className="h-3 w-3" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-36">
+                        <DropdownMenuItem
+                          onClick={() => {
+                            const text = m.text || m.html?.replace(/<[^>]+>/g, "") || "";
+                            navigator.clipboard.writeText(text).then(() => toast.success("Copied")).catch(() => toast.error("Copy failed"));
+                          }}
+                        >
+                          Copy message
+                        </DropdownMenuItem>
+                        {isAgent && !m.deleted && (
+                          <DropdownMenuItem
+                            className="text-destructive focus:text-destructive"
+                            onClick={() => handleDeleteMessage(m.id)}
+                          >
+                            <Trash2 className="mr-2 h-3.5 w-3.5" />
+                            Delete
+                          </DropdownMenuItem>
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
                 </div>
               </div>
@@ -1653,6 +1706,35 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
         to   { opacity: 1; transform: translateY(0) scale(1); }
       }
     `}</style>
+
+    {/* Delete message confirmation dialog */}
+    <Dialog open={!!deleteTarget} onOpenChange={(o) => { if (!o && !deleting) setDeleteTarget(null); }}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Delete message?</DialogTitle>
+        </DialogHeader>
+        <p className="text-sm text-muted-foreground">
+          This will permanently remove the message content. This action cannot be undone.
+        </p>
+        <DialogFooter className="gap-2 pt-2">
+          <button
+            onClick={() => setDeleteTarget(null)}
+            disabled={deleting}
+            className="rounded-md border border-border px-4 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={confirmDelete}
+            disabled={deleting}
+            className="rounded-md bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50 flex items-center gap-2"
+          >
+            {deleting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            {deleting ? "Deleting…" : "Delete"}
+          </button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
     </>
   );
 }

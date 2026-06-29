@@ -26,6 +26,7 @@ export interface Message {
   author?: string;
   mentions?: string[];
   attachments?: MessageAttachment[];
+  deleted?: boolean;
 }
 
 export interface CustomerNote {

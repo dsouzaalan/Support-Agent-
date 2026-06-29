@@ -125,6 +125,8 @@ export const api = {
       apiFetch(`/conversations/${id}/one-click-login`, { method: 'POST' }),
     setPriority: (id: string, level: 'none' | 'low' | 'medium' | 'high' | 'urgent') =>
       apiFetch(`/conversations/${id}/priority`, { method: 'PATCH', body: JSON.stringify({ priority: level }) }),
+    redactMessage: (id: string, partId: string) =>
+      apiFetch(`/conversations/${id}/parts/${partId}`, { method: 'DELETE' }),
   },
 
   contacts: {
@@ -196,15 +198,16 @@ export const api = {
   },
 
   auditLogs: {
-    list: (params?: { agentId?: string; action?: string; targetId?: string; from?: string; to?: string; page?: number; perPage?: number }) => {
+    list: (params?: { agentId?: string; action?: string; targetId?: string; metadataStatus?: string; from?: string; to?: string; page?: number; perPage?: number }) => {
       const q = new URLSearchParams();
-      if (params?.agentId)  q.set('agentId',  params.agentId);
-      if (params?.action)   q.set('action',   params.action);
-      if (params?.targetId) q.set('targetId', params.targetId);
-      if (params?.from)     q.set('from',     params.from);
-      if (params?.to)       q.set('to',       params.to);
-      if (params?.page)     q.set('page',     String(params.page));
-      if (params?.perPage)  q.set('perPage',  String(params.perPage));
+      if (params?.agentId)        q.set('agentId',        params.agentId);
+      if (params?.action)         q.set('action',         params.action);
+      if (params?.targetId)       q.set('targetId',       params.targetId);
+      if (params?.metadataStatus) q.set('metadataStatus', params.metadataStatus);
+      if (params?.from)           q.set('from',           params.from);
+      if (params?.to)             q.set('to',             params.to);
+      if (params?.page)           q.set('page',           String(params.page));
+      if (params?.perPage)        q.set('perPage',        String(params.perPage));
       const qs = q.toString();
       return apiFetch(`/audit-logs${qs ? `?${qs}` : ''}`);
     },
