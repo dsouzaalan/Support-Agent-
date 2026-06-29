@@ -130,6 +130,7 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
   const [translatePreview, setTranslatePreview] = useState<null | { lang: string; text: string }>(null);
   const [translating, setTranslating] = useState(false);
   const [showTranslated, setShowTranslated] = useState<Record<string, boolean>>({});
+  const [translationCache, setTranslationCache] = useState<Record<string, { text: string; lang: string; loading: boolean }>>({});
   const [showCanned, setShowCanned] = useState(false);
   const [showArticles, setShowArticles] = useState(false);
   const [mcpResult, setMcpResult] = useState<string[] | null>(null);
@@ -222,7 +223,7 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
     if (isSwitch) {
       // Switching to a new conversation — full reset.
       setDraft(""); setToneCheck(null); setTranslatePreview(null);
-      setShowTranslated({}); setMcpResult(null);
+      setShowTranslated({}); setTranslationCache({}); setMcpResult(null);
       setConvTags(conversation.tags ?? []);
       setAttachedFiles([]);
       setLocalAssignedAgent(conversation.assignedAgent ?? null);
@@ -434,14 +435,19 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
   }, [conversation.id]);
   const translateReply = async () => {
     if (!draft.trim()) return toast.error("Write a reply first");
-    const lang = conversation.customer.language;
-    if (!lang || lang === AGENT_LANG) return toast(`Customer language matches yours.`);
-    const langName = LANG_ENGLISH[lang] || lang;
+
+    // Collect last 3 customer messages to give Groq real text for language detection
+    const customerSamples = localMessages
+      .filter((m) => m.from === "customer" && (m.text || m.html))
+      .slice(-3)
+      .map((m) => m.text || m.html?.replace(/<[^>]+>/g, "") || "")
+      .filter(Boolean);
+
     setTranslating(true);
     try {
-      const res = await api.ai.compose(conversation.id, draft, 'translate', langName);
-      const translated = res?.data?.result;
-      if (translated) setTranslatePreview({ lang, text: translated });
+      const res = await api.ai.translateDraft(conversation.id, draft, customerSamples);
+      const { translated, detectedLanguage } = res?.data ?? {};
+      if (translated) setTranslatePreview({ lang: detectedLanguage || "customer language", text: translated });
     } catch (err: any) {
       toast.error(err.message || "Translation failed");
     } finally {
@@ -1123,9 +1129,35 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
                 <MessageAttachments attachments={m.attachments} isAgent={false} />
               </div>
             ) : null;
-            const translated = showTranslated[m.id];
-            const langDifferent = m.from === "customer" && m.language && m.language !== AGENT_LANG;
             const isAgent = m.from === "agent";
+            const isCustomer = m.from === "customer";
+            const tlEntry = translationCache[m.id];
+            const showTl = showTranslated[m.id];
+
+            const handleTranslate = async () => {
+              if (showTl) { setShowTranslated((p) => ({ ...p, [m.id]: false })); return; }
+              if (tlEntry?.text) { setShowTranslated((p) => ({ ...p, [m.id]: true })); return; }
+              const msgText = m.text || "";
+              if (!msgText.trim()) return;
+              setTranslationCache((p) => ({ ...p, [m.id]: { text: "", lang: "", loading: true } }));
+              setShowTranslated((p) => ({ ...p, [m.id]: true }));
+              try {
+                const res = await api.ai.translate(msgText);
+                const { translated, detectedLanguage, isEnglish } = res?.data ?? {};
+                if (isEnglish) {
+                  setTranslationCache((p) => ({ ...p, [m.id]: { text: "", lang: "en", loading: false } }));
+                  toast("Message is already in English");
+                  setShowTranslated((p) => ({ ...p, [m.id]: false }));
+                } else {
+                  setTranslationCache((p) => ({ ...p, [m.id]: { text: translated, lang: detectedLanguage, loading: false } }));
+                }
+              } catch {
+                setTranslationCache((p) => ({ ...p, [m.id]: { text: "", lang: "", loading: false } }));
+                setShowTranslated((p) => ({ ...p, [m.id]: false }));
+                toast.error("Translation failed");
+              }
+            };
+
             return (
               <div key={m.id} id={`msg-${m.id}`} className={cn("flex gap-2.5", isAgent && "flex-row-reverse")}>
                 <div
@@ -1136,25 +1168,40 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
                 </div>
                 <div className={cn("max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed",
                   !isAgent ? "rounded-tl-sm bg-card text-foreground shadow-sm ring-1 ring-border" : "rounded-tr-sm bg-primary text-primary-foreground")}>
-                  {langDifferent && (
+                  {/* Translate button — visible on all customer messages */}
+                  {isCustomer && (
                     <div className="mb-1 flex items-center gap-1">
-                      <span className="rounded bg-muted px-1.5 py-0 text-[9px] font-semibold uppercase text-muted-foreground">{m.language}</span>
-                      <button onClick={() => setShowTranslated({ ...showTranslated, [m.id]: !translated })}
-                        className="inline-flex items-center gap-0.5 rounded px-1.5 py-0 text-[10px] font-medium text-primary hover:bg-primary/10">
-                        <Languages className="h-2.5 w-2.5" /> {translated ? "Show original" : "Translate"}
+                      {tlEntry?.lang && tlEntry.lang !== "en" && (
+                        <span className="rounded bg-muted px-1.5 py-0 text-[9px] font-semibold uppercase text-muted-foreground">
+                          {tlEntry.lang}
+                        </span>
+                      )}
+                      <button
+                        onClick={handleTranslate}
+                        disabled={tlEntry?.loading}
+                        className="inline-flex items-center gap-0.5 rounded px-1.5 py-0 text-[10px] font-medium text-primary hover:bg-primary/10 disabled:opacity-50"
+                      >
+                        <Languages className="h-2.5 w-2.5" />
+                        {tlEntry?.loading ? "Translating…" : showTl && tlEntry?.text ? "Show original" : "Translate"}
                       </button>
                     </div>
                   )}
-                  {m.html ? (
+
+                  {showTl && tlEntry?.text ? (
+                    <LinkifiedText text={tlEntry.text} isAgent={isAgent} />
+                  ) : m.html ? (
                     <div
                       className={cn("im-body", isAgent ? "im-body--agent" : "im-body--customer")}
                       dangerouslySetInnerHTML={{ __html: m.html }}
                     />
-                  ) : (translated && m.translation ? m.translation : m.text) ? (
-                    <LinkifiedText text={translated && m.translation ? m.translation : m.text} isAgent={isAgent} />
+                  ) : m.text ? (
+                    <LinkifiedText text={m.text} isAgent={isAgent} />
                   ) : null}
-                  {translated && m.translation && (
-                    <div className="mt-1 text-[10px] italic text-muted-foreground">Translated from {LANG_LABELS[m.language!] || m.language}</div>
+
+                  {showTl && tlEntry?.text && (
+                    <div className="mt-1 text-[10px] italic text-muted-foreground">
+                      Translated from {tlEntry.lang}
+                    </div>
                   )}
                   <MessageAttachments attachments={m.attachments} isAgent={isAgent} />
                   <div className={cn("mt-1 flex items-center gap-1 text-[10px]", !isAgent ? "text-muted-foreground" : "text-primary-foreground/70")}>
@@ -1349,9 +1396,19 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
         )}
         {translatePreview && (
           <div className="mb-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs">
-            <div className="mb-1 flex items-center gap-1 font-medium text-primary"><Languages className="h-3 w-3" /> Translation preview · {LANG_LABELS[translatePreview.lang]}</div>
+            <div className="mb-1 flex items-center justify-between gap-1">
+              <span className="flex items-center gap-1 font-medium text-primary">
+                <Languages className="h-3 w-3" /> Translation preview · {LANG_LABELS[translatePreview.lang] || translatePreview.lang}
+              </span>
+              <button
+                onClick={() => setTranslatePreview(null)}
+                title="Dismiss — send original instead"
+                className="rounded p-0.5 text-muted-foreground hover:bg-primary/10 hover:text-foreground"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
             <p className="leading-relaxed text-foreground/85">{translatePreview.text}</p>
-            <button onClick={() => setTranslatePreview(null)} className="mt-1 text-[10px] text-muted-foreground hover:text-foreground">Use original instead</button>
           </div>
         )}
         {/* Hidden file input */}

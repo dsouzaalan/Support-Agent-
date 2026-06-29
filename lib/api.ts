@@ -245,6 +245,10 @@ export const api = {
       apiFetch('/ai/diagnose-hints', { method: 'POST', body: JSON.stringify({ conversationId }) }),
     sentiment: (conversationId: string) =>
       apiFetch('/ai/sentiment', { method: 'POST', body: JSON.stringify({ conversationId }) }),
+    translate: (text: string) =>
+      apiFetch('/ai/translate', { method: 'POST', body: JSON.stringify({ text }) }),
+    translateDraft: (conversationId: string, draft: string, customerSamples: string[]) =>
+      apiFetch('/ai/translate-draft', { method: 'POST', body: JSON.stringify({ conversationId, draft, customerSamples }) }),
   },
 
   sseUrl: () => {
