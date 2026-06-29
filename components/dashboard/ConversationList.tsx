@@ -2,14 +2,30 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { cn } from "@/lib/utils";
-import type { Conversation, TierType } from "@/lib/mock-data";
+import type { Conversation, PriorityLevel, TierType } from "@/lib/mock-data";
 import { TierBadge } from "./CustomerPanel";
-import { Search, Circle, AlertTriangle, Filter, Bookmark, Eye, ChevronDown, Plus, UserCheck, Loader2, UserRound } from "lucide-react";
+import { Search, Circle, AlertTriangle, Filter, Bookmark, Eye, ChevronDown, Plus, UserCheck, Loader2, UserRound, ShieldAlert, ShieldX } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 
-const TABS = ["All", "Open", "Assigned to Me", "Created by Me", "Pending", "Closed"] as const;
+const PRIORITY_BADGE_CONFIG: Record<string, { label: string; classes: string; dot: string }> = {
+  low:    { label: 'Low',    classes: 'bg-sky-50 text-sky-600 dark:bg-sky-900/20 dark:text-sky-400',         dot: 'bg-sky-400' },
+  medium: { label: 'Medium', classes: 'bg-amber-50 text-amber-600 dark:bg-amber-900/20 dark:text-amber-400', dot: 'bg-amber-400' },
+  high:   { label: 'High',   classes: 'bg-orange-50 text-orange-600 dark:bg-orange-900/20 dark:text-orange-400', dot: 'bg-orange-500' },
+  urgent: { label: 'Urgent', classes: 'bg-red-50 text-red-600 dark:bg-red-900/20 dark:text-red-400',         dot: 'bg-red-500' },
+};
+function PriorityBadge({ level }: { level: PriorityLevel }) {
+  const cfg = PRIORITY_BADGE_CONFIG[level];
+  if (!cfg) return null;
+  return (
+    <span className={cn("inline-flex items-center gap-0.5 rounded px-1 py-0 text-[9px] font-semibold", cfg.classes)}>
+      <span className={cn("h-1.5 w-1.5 rounded-full", cfg.dot)} />{cfg.label}
+    </span>
+  );
+}
+
+const TABS = ["All", "Open", "Assigned to Me", "Created by Me", "Pending", "Closed", "Spam"] as const;
 type Tab = (typeof TABS)[number];
 type Sort = "priority" | "frustrated" | "waiting" | "sla" | "tier" | "newest";
 
@@ -62,11 +78,14 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
   const [apiResults, setApiResults] = useState<Conversation[] | null>(null);
   const [apiSearching, setApiSearching] = useState(false);
   const searchDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [sort, setSort] = useState<Sort>("priority");
+  const [sort, setSort] = useState<Sort>("newest");
   const [tierFilter, setTierFilter] = useState<TierType | "all">("all");
   const [tagFilter, setTagFilter] = useState<string | "all">("all");
   const [unhealthyOnly, setUnhealthyOnly] = useState(false);
+  const [priorityOnly, setPriorityOnly] = useState(false);
   const [savedView, setSavedView] = useState<string | null>(null);
+  const [spamConversations, setSpamConversations] = useState<Conversation[]>([]);
+  const [spamLoading, setSpamLoading] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const listScrollRef = useRef<HTMLDivElement>(null);
 
@@ -114,6 +133,7 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
         case "4": setTab("Created by Me"); break;
         case "5": setTab("Pending"); break;
         case "6": setTab("Closed"); break;
+        case "7": setTab("Spam"); break;
       }
     };
 
@@ -135,6 +155,16 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
     return () => el.removeEventListener("scroll", onScroll);
   }, [onLoadMore, hasMore, loadingMore]);
 
+  // Fetch spam conversations on demand when the Spam tab is activated
+  useEffect(() => {
+    if (tab !== "Spam") return;
+    setSpamLoading(true);
+    api.conversations.list({ status: "spam", perPage: 50 })
+      .then((res) => setSpamConversations(res?.data?.conversations ?? []))
+      .catch(() => setSpamConversations([]))
+      .finally(() => setSpamLoading(false));
+  }, [tab]);
+
   // Debounced API search for queries 3+ chars — searches beyond the loaded 50
   useEffect(() => {
     if (searchDebounce.current) clearTimeout(searchDebounce.current);
@@ -153,7 +183,15 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
     return () => { if (searchDebounce.current) clearTimeout(searchDebounce.current); };
   }, [q]);
 
-  const allTags = useMemo(() => Array.from(new Set(conversations.flatMap((c) => c.customer.tags))).sort(), [conversations]);
+  const allTags = useMemo(() => {
+    const seen = new Map<string, string>(); // id → name
+    for (const c of conversations) {
+      for (const t of c.tags ?? []) seen.set(t.id, t.name);
+    }
+    return Array.from(seen.entries())
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [conversations]);
 
   // Returns true if any field in this conversation matches the search query.
   // Searches name, subject, email, tags, AND the full text of every message (replies, notes, macros).
@@ -185,18 +223,27 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
       base = conversations;
     }
 
+    // Spam tab uses its own fetched list — bypass the normal base entirely
+    if (tab === "Spam") {
+      const qLow = q.trim().toLowerCase();
+      return qLow
+        ? spamConversations.filter((c) => matchesQuery(c, qLow))
+        : spamConversations;
+    }
+
     let list = base.filter((c) => {
-      if (!isSearching) {
-        if (tab === "Closed" && c.status !== "closed") return false;
-        if (tab !== "Closed" && c.status === "closed") return false;
-        if (tab === "Open" && c.status !== "open") return false;
-        if (tab === "Pending" && c.status !== "pending") return false;
-        if (tab === "Assigned to Me" && !c.assignedToMe) return false;
-        if (tab === "Created by Me" && !c.createdByMe) return false;
-      }
+      // Tab/status filters apply always (searching or not)
+      if (c.status === "spam") return false; // never show spam in non-spam tabs
+      if (tab === "Closed" && c.status !== "closed") return false;
+      if (tab !== "Closed" && c.status === "closed") return false;
+      if (tab === "Open" && c.status !== "open") return false;
+      if (tab === "Pending" && c.status !== "pending") return false;
+      if (tab === "Assigned to Me" && !c.assignedToMe) return false;
+      if (tab === "Created by Me" && !c.createdByMe) return false;
       if (tierFilter !== "all" && c.customer.tier !== tierFilter) return false;
-      if (tagFilter !== "all" && !c.customer.tags.includes(tagFilter)) return false;
+      if (tagFilter !== "all" && !c.tags?.some((t) => t.id === tagFilter)) return false;
       if (unhealthyOnly && c.customer.mailboxesDisconnected === 0 && c.customer.failedDomains === 0 && !c.customer.paymentExpired) return false;
+      if (priorityOnly && (!c.priorityLevel || c.priorityLevel === 'none')) return false;
       // For short queries (< 3 chars) the API isn't called — filter locally across all fields.
       if (isSearching && !apiResults) {
         if (!matchesQuery(c, qLow)) return false;
@@ -210,18 +257,18 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
         case "waiting": return b.waitMinutes - a.waitMinutes;
         case "sla": return (b.waitMinutes / b.slaMinutes) - (a.waitMinutes / a.slaMinutes);
         case "tier": return TIER_ORDER[a.customer.tier] - TIER_ORDER[b.customer.tier];
-        case "newest": return a.lastTime.localeCompare(b.lastTime);
+        case "newest": return (b.updatedAtTs ?? 0) - (a.updatedAtTs ?? 0);
       }
     });
     return list;
-  }, [conversations, tab, q, sort, tierFilter, tagFilter, unhealthyOnly, apiResults, matchesQuery]);
+  }, [conversations, tab, q, sort, tierFilter, tagFilter, unhealthyOnly, priorityOnly, apiResults, matchesQuery]);
 
   // Keep filteredRef in sync so the keyboard handler sees the latest visible list
   filteredRef.current = filtered;
 
   const applySaved = (name: string) => {
     setSavedView(name);
-    if (name === "My VIPs waiting") { setTab("All"); setTagFilter("VIP"); setSort("waiting"); setUnhealthyOnly(false); setTierFilter("all"); }
+    if (name === "My VIPs waiting") { setTab("All"); setTagFilter("all"); setTierFilter("Platinum"); setSort("waiting"); setUnhealthyOnly(false); }
     if (name === "Frustrated & unassigned") { setTab("All"); setTagFilter("all"); setSort("frustrated"); setUnhealthyOnly(false); setTierFilter("all"); }
     if (name === "Account health alerts") { setTab("All"); setTagFilter("all"); setSort("priority"); setUnhealthyOnly(true); setTierFilter("all"); }
   };
@@ -254,7 +301,7 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
             className="w-full bg-transparent text-sm placeholder:text-muted-foreground focus:outline-none" />
           {apiSearching && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />}
         </div>
-        <div className="mt-3 flex gap-1 overflow-x-auto">
+        <div className="mt-3 flex gap-1 overflow-x-auto pb-1 [&::-webkit-scrollbar]:h-[3px] [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border [&::-webkit-scrollbar-track]:bg-transparent">
           {TABS.map((f) => (
             <button key={f} onClick={() => setTab(f)}
               className={cn("whitespace-nowrap rounded-md px-2.5 py-1 text-xs font-medium transition",
@@ -271,7 +318,13 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
             { value: "Platinum", label: "Platinum" }, { value: "Gold", label: "Gold" },
             { value: "Silver", label: "Silver" }, { value: "New", label: "New" },
           ]} />
-          <SelectFilter value={tagFilter} onChange={setTagFilter} options={[{ value: "all", label: "All tags" }, ...allTags.map((t) => ({ value: t, label: t }))]} />
+          <SelectFilter value={tagFilter} onChange={setTagFilter} options={[{ value: "all", label: "All tags" }, ...allTags.map((t) => ({ value: t.id, label: t.name }))]} />
+          <button onClick={() => setPriorityOnly(!priorityOnly)}
+            className={cn("inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-medium",
+              priorityOnly ? "border-orange-400/50 bg-orange-50 text-orange-600 dark:bg-orange-900/20 dark:text-orange-400" : "border-border text-muted-foreground hover:bg-muted")}>
+            <span className={cn("h-2 w-2 rounded-full", priorityOnly ? "bg-orange-500" : "bg-muted-foreground/40")} />
+            Priority
+          </button>
           <button onClick={() => setUnhealthyOnly(!unhealthyOnly)}
             className={cn("rounded-md border px-1.5 py-0.5 text-[10px] font-medium",
               unhealthyOnly ? "border-danger/40 bg-danger/10 text-danger" : "border-border text-muted-foreground hover:bg-muted")}>
@@ -279,7 +332,7 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
           </button>
         </div>
         {/* Saved views */}
-        <div className="mt-2 flex items-center gap-1 overflow-x-auto">
+        <div className="mt-2 flex items-center gap-1 overflow-x-auto pb-1 [&::-webkit-scrollbar]:h-[3px] [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border [&::-webkit-scrollbar-track]:bg-transparent">
           <Bookmark className="h-3 w-3 shrink-0 text-muted-foreground" />
           {["My VIPs waiting", "Frustrated & unassigned", "Account health alerts"].map((v) => (
             <button key={v} onClick={() => applySaved(v)}
@@ -292,24 +345,42 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
       </div>
 
       <div ref={listScrollRef} className="flex-1 overflow-y-auto">
-        {filtered.map((c) => (
-          <ConvRow
-            key={c.id}
-            c={c}
-            selected={c.id === selectedId}
-            onSelect={() => {
-              const sq = q.trim();
-              if (sq.length >= 2) {
-                router.push(`/inbox/${c.id}?q=${encodeURIComponent(sq)}`);
-              } else {
-                onSelect(c.id);
-              }
-            }}
-            clickupTicket={clickupLinks?.[c.id]}
-            searchQuery={q.trim()}
-          />
-        ))}
-        {filtered.length === 0 && <div className="px-4 py-12 text-center text-xs text-muted-foreground">No conversations match.</div>}
+        {tab === "Spam" && spamLoading ? (
+          <div className="flex items-center justify-center gap-2 py-12 text-xs text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading spam…
+          </div>
+        ) : (
+          <>
+            {tab === "Spam" && filtered.length > 0 && (
+              <div className="flex items-center gap-1.5 border-b border-border bg-red-50/50 dark:bg-red-900/10 px-4 py-2 text-[10px] font-medium text-red-600 dark:text-red-400">
+                <ShieldX className="h-3 w-3" />
+                {filtered.length} spam conversation{filtered.length !== 1 ? "s" : ""} — these were flagged by Intercom
+              </div>
+            )}
+            {filtered.map((c) => (
+              <ConvRow
+                key={c.id}
+                c={c}
+                selected={c.id === selectedId}
+                onSelect={() => {
+                  const sq = q.trim();
+                  if (sq.length >= 2) {
+                    router.push(`/inbox/${c.id}?q=${encodeURIComponent(sq)}`);
+                  } else {
+                    onSelect(c.id);
+                  }
+                }}
+                clickupTicket={clickupLinks?.[c.id]}
+                searchQuery={q.trim()}
+              />
+            ))}
+            {filtered.length === 0 && (
+              <div className="px-4 py-12 text-center text-xs text-muted-foreground">
+                {tab === "Spam" ? "No spam conversations found." : "No conversations match."}
+              </div>
+            )}
+          </>
+        )}
         {loadingMore && (
           <div className="flex items-center justify-center gap-2 py-4 text-xs text-muted-foreground">
             <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading more…
@@ -409,6 +480,14 @@ function ConvRow({ c, selected, onSelect, clickupTicket, searchQuery }: { c: Con
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
+          )}
+          {c.priorityLevel && c.priorityLevel !== 'none' && (
+            <PriorityBadge level={c.priorityLevel} />
+          )}
+          {(c.sla?.firstReplyBreached || c.sla?.nextReplyBreached) && (
+            <span className="inline-flex items-center gap-0.5 rounded bg-danger/15 px-1 py-0 text-[9px] font-semibold uppercase text-danger animate-pulse">
+              <ShieldAlert className="h-2.5 w-2.5" />SLA
+            </span>
           )}
           {c.firstResponsePending && <span className="rounded bg-danger/15 px-1 py-0 text-[9px] font-semibold uppercase text-danger">1st reply</span>}
           {(() => {

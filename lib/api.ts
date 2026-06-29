@@ -121,10 +121,22 @@ export const api = {
     search: (q: string) => apiFetch(`/conversations/search?q=${encodeURIComponent(q)}`),
     assign: (id: string, agentId: string | null) =>
       apiFetch(`/conversations/${id}/assign`, { method: 'PATCH', body: JSON.stringify({ agentId }) }),
+    oneClickLogin: (id: string) =>
+      apiFetch(`/conversations/${id}/one-click-login`, { method: 'POST' }),
+    setPriority: (id: string, level: 'none' | 'low' | 'medium' | 'high' | 'urgent') =>
+      apiFetch(`/conversations/${id}/priority`, { method: 'PATCH', body: JSON.stringify({ priority: level }) }),
+    redactMessage: (id: string, partId: string) =>
+      apiFetch(`/conversations/${id}/parts/${partId}`, { method: 'DELETE' }),
+    updateNote: (id: string, partId: string, body: string) =>
+      apiFetch(`/conversations/${id}/parts/${partId}`, { method: 'PATCH', body: JSON.stringify({ body }) }),
   },
 
   contacts: {
     search: (q: string) => apiFetch(`/contacts/search?q=${encodeURIComponent(q)}`),
+    createNote: (contactId: string, body: string) =>
+      apiFetch(`/contacts/${contactId}/notes`, { method: 'POST', body: JSON.stringify({ body }) }),
+    deleteNote: (noteId: string) =>
+      apiFetch(`/contacts/notes/${noteId}`, { method: 'DELETE' }),
   },
 
   tags: {
@@ -192,18 +204,60 @@ export const api = {
   },
 
   auditLogs: {
-    list: (params?: { agentId?: string; action?: string; targetId?: string; from?: string; to?: string; page?: number; perPage?: number }) => {
+    list: (params?: { agentId?: string; action?: string; targetId?: string; metadataStatus?: string; from?: string; to?: string; page?: number; perPage?: number }) => {
       const q = new URLSearchParams();
-      if (params?.agentId)  q.set('agentId',  params.agentId);
-      if (params?.action)   q.set('action',   params.action);
-      if (params?.targetId) q.set('targetId', params.targetId);
-      if (params?.from)     q.set('from',     params.from);
-      if (params?.to)       q.set('to',       params.to);
-      if (params?.page)     q.set('page',     String(params.page));
-      if (params?.perPage)  q.set('perPage',  String(params.perPage));
+      if (params?.agentId)        q.set('agentId',        params.agentId);
+      if (params?.action)         q.set('action',         params.action);
+      if (params?.targetId)       q.set('targetId',       params.targetId);
+      if (params?.metadataStatus) q.set('metadataStatus', params.metadataStatus);
+      if (params?.from)           q.set('from',           params.from);
+      if (params?.to)             q.set('to',             params.to);
+      if (params?.page)           q.set('page',           String(params.page));
+      if (params?.perPage)        q.set('perPage',        String(params.perPage));
       const qs = q.toString();
       return apiFetch(`/audit-logs${qs ? `?${qs}` : ''}`);
     },
+  },
+
+  settings: {
+    get: () => apiFetch('/settings'),
+    update: (payload: Record<string, any>) =>
+      apiFetch('/settings', { method: 'PATCH', body: JSON.stringify(payload) }),
+  },
+
+  alerts: {
+    list: () => apiFetch('/alerts'),
+  },
+
+  ai: {
+    compose: (conversationId: string, draft: string, mode: 'rephrase' | 'formal' | 'friendly' | 'concise' | 'expand' | 'translate', targetLanguage?: string) =>
+      apiFetch('/ai/compose', { method: 'POST', body: JSON.stringify({ conversationId, draft, mode, targetLanguage }) }),
+    summarize: (conversationId: string) =>
+      apiFetch('/ai/summarize', { method: 'POST', body: JSON.stringify({ conversationId }) }),
+    suggest: (conversationId: string) =>
+      apiFetch('/ai/suggest', { method: 'POST', body: JSON.stringify({ conversationId }) }),
+    suggestMacros: (conversationId: string) =>
+      apiFetch('/ai/suggest-macros', { method: 'POST', body: JSON.stringify({ conversationId }) }),
+    suggestArticles: (conversationId: string) =>
+      apiFetch('/ai/suggest-articles', { method: 'POST', body: JSON.stringify({ conversationId }) }),
+    autoTag: (conversationId: string) =>
+      apiFetch('/ai/auto-tag', { method: 'POST', body: JSON.stringify({ conversationId }) }),
+    applyTags: (conversationId: string, tagIds: string[]) =>
+      apiFetch('/ai/apply-tags', { method: 'POST', body: JSON.stringify({ conversationId, tagIds }) }),
+    chat: (conversationId: string, message: string, history?: { role: string; content: string }[]) =>
+      apiFetch('/ai/chat', { method: 'POST', body: JSON.stringify({ conversationId, message, history }) }),
+    insights: (days = 7) =>
+      apiFetch(`/ai/insights?days=${days}`),
+    diagnose: (conversationId: string, query: string) =>
+      apiFetch('/ai/diagnose', { method: 'POST', body: JSON.stringify({ conversationId, query }) }),
+    diagnoseHints: (conversationId: string) =>
+      apiFetch('/ai/diagnose-hints', { method: 'POST', body: JSON.stringify({ conversationId }) }),
+    sentiment: (conversationId: string) =>
+      apiFetch('/ai/sentiment', { method: 'POST', body: JSON.stringify({ conversationId }) }),
+    translate: (text: string) =>
+      apiFetch('/ai/translate', { method: 'POST', body: JSON.stringify({ text }) }),
+    translateDraft: (conversationId: string, draft: string, customerSamples: string[]) =>
+      apiFetch('/ai/translate-draft', { method: 'POST', body: JSON.stringify({ conversationId, draft, customerSamples }) }),
   },
 
   sseUrl: () => {

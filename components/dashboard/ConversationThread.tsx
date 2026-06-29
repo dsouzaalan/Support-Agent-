@@ -2,17 +2,20 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
-import type { Conversation, ConvStatus, Message, MessageAttachment } from "@/lib/mock-data";
-import { suggestedMcp, getMcpResponse } from "@/lib/mock-data";
+import type { Conversation, ConvStatus, Message, MessageAttachment, PriorityLevel } from "@/lib/mock-data";
+import { suggestedMcp } from "@/lib/mock-data";
 import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { usePermissions } from "@/hooks/usePermissions";
 import {
   Sparkles, SendHorizonal, Wand2, ExternalLink,
   AlertTriangle, CheckCheck, MoreHorizontal, UserPlus, Languages,
-  BookOpen, FileText, Clock, Stethoscope, StickyNote, AtSign, CreditCard,
+  BookOpen, FileText, Clock, Stethoscope, StickyNote, CreditCard,
   ClipboardList, RotateCcw, Keyboard, Paperclip, Tag, X, Plus, Loader2, BellOff,
+  Bot, ChevronDown, Flag, Eye, Trash2,
 } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { AiCopilotPanel } from "./AiCopilotPanel";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 
@@ -25,7 +28,52 @@ const DRAFTS: Record<string, string> = {
   c6: "Hi Lin — Scale's API ceiling is 240 req/min. You peaked at 312. Two options: client-side backoff or Enterprise burst pool (1,000 req/min).",
 };
 
+const PRIORITY_OPTIONS: { level: PriorityLevel; label: string; color: string; dotColor: string }[] = [
+  { level: 'none',   label: 'No priority', color: 'text-muted-foreground', dotColor: 'bg-muted-foreground/40' },
+  { level: 'low',    label: 'Low',         color: 'text-sky-500',          dotColor: 'bg-sky-400' },
+  { level: 'medium', label: 'Medium',      color: 'text-amber-500',        dotColor: 'bg-amber-400' },
+  { level: 'high',   label: 'High',        color: 'text-orange-500',       dotColor: 'bg-orange-500' },
+  { level: 'urgent', label: 'Urgent',      color: 'text-red-500',          dotColor: 'bg-red-500' },
+];
+
+function PriorityDropdown({ level, onSelect }: { level: PriorityLevel; onSelect: (l: PriorityLevel) => void }) {
+  const current = PRIORITY_OPTIONS.find((o) => o.level === level) ?? PRIORITY_OPTIONS[0];
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          title="Set priority"
+          className={cn(
+            "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors hover:bg-muted",
+            level === 'none' ? "border-border text-muted-foreground" : `border-current ${current.color}`
+          )}
+        >
+          <span className={cn("h-2 w-2 rounded-full shrink-0", current.dotColor)} />
+          {level === 'none' ? 'Priority' : current.label}
+          <ChevronDown className="h-3 w-3 opacity-60" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-36">
+        <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">Priority</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {PRIORITY_OPTIONS.map((opt) => (
+          <DropdownMenuItem
+            key={opt.level}
+            onClick={() => onSelect(opt.level)}
+            className={cn("gap-2 text-xs cursor-pointer", opt.color)}
+          >
+            <span className={cn("h-2 w-2 rounded-full shrink-0", opt.dotColor)} />
+            {opt.label}
+            {opt.level === level && <Flag className="ml-auto h-3 w-3 opacity-60" />}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 const LANG_LABELS: Record<string, string> = { en: "English", de: "Deutsch", fr: "Français", es: "Español" };
+const LANG_ENGLISH: Record<string, string> = { en: "English", de: "German", fr: "French", es: "Spanish" };
 const AGENT_LANG = "en";
 
 interface ThreadProps {
@@ -36,6 +84,7 @@ interface ThreadProps {
   onStatusChange?: (status: ConvStatus) => void;
   onTagsChange?: (tags: { id: string; name: string }[]) => void;
   onSnooze?: (snoozedUntil: number) => void;
+  onPriorityChange?: (level: PriorityLevel) => void;
   highlightMessageId?: string;
   searchQuery?: string;
 }
@@ -70,7 +119,7 @@ const SNOOZE_OPTIONS = [
   { label: "Next week",   getTime: () => Math.floor(Date.now() / 1000) + 7 * 24 * 3600 },
 ];
 
-export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl, onLinkClickup, onStatusChange, onTagsChange, onSnooze, highlightMessageId, searchQuery }: ThreadProps) {
+export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl, onLinkClickup, onStatusChange, onTagsChange, onSnooze, onPriorityChange, highlightMessageId, searchQuery }: ThreadProps) {
   const { user } = useAuth();
   const { can } = usePermissions();
   const currentUserName = user ? `${user.firstName} ${user.lastName ?? ""}`.trim() : "Agent";
@@ -79,10 +128,13 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
   const [aiThinking, setAiThinking] = useState(false);
   const [toneCheck, setToneCheck] = useState<null | { tone: string; suggestion: string }>(null);
   const [translatePreview, setTranslatePreview] = useState<null | { lang: string; text: string }>(null);
+  const [translating, setTranslating] = useState(false);
   const [showTranslated, setShowTranslated] = useState<Record<string, boolean>>({});
+  const [translationCache, setTranslationCache] = useState<Record<string, { text: string; lang: string; loading: boolean }>>({});
   const [showCanned, setShowCanned] = useState(false);
   const [showArticles, setShowArticles] = useState(false);
   const [mcpResult, setMcpResult] = useState<string[] | null>(null);
+  const [mcpLoading, setMcpLoading] = useState(false);
   const [showNote, setShowNote] = useState(false);
   const [noteVal, setNoteVal] = useState("");
   const [localMessages, setLocalMessages] = useState<Message[]>(conversation.messages);
@@ -97,7 +149,22 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
   const [agentList, setAgentList] = useState<{ id: string; name: string }[]>([]);
   const [agentListLoading, setAgentListLoading] = useState(false);
   const [assigning, setAssigning] = useState(false);
+  // AI features
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [editingNoteBody, setEditingNoteBody] = useState("");
+  const [savingNote, setSavingNote] = useState(false);
+  const [showCopilot, setShowCopilot] = useState(false);
+  const [aiSuggestions, setAiSuggestions] = useState<Array<{ type: string; body?: string; macroId?: string; macroName?: string }>>([]);
+  const [showSuggestions, setShowSuggestions] = useState(true);
+  const [aiTagSuggestions, setAiTagSuggestions] = useState<Array<{ id: string; name: string }>>([]);
+  const [showTagBanner, setShowTagBanner] = useState(false);
+  const [showComposeMenu, setShowComposeMenu] = useState(false);
+  const [composing, setComposing] = useState(false);
   const [localAssignedAgent, setLocalAssignedAgent] = useState(conversation.assignedAgent ?? null);
+  const [localPriorityLevel, setLocalPriorityLevel] = useState<PriorityLevel>(conversation.priorityLevel ?? 'none');
+  useEffect(() => { setLocalPriorityLevel(conversation.priorityLevel ?? 'none'); }, [conversation.id, conversation.priorityLevel]);
 
   // Tags
   const [convTags, setConvTags] = useState<{ id: string; name: string }[]>(conversation.tags ?? []);
@@ -122,12 +189,82 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
   const [newArticleState, setNewArticleState] = useState<"published" | "draft">("published");
   const [creatingArticle, setCreatingArticle] = useState(false);
 
+  // One-click login
+  const [loginLoading, setLoginLoading] = useState(false);
+  const handleOneClickLogin = async () => {
+    if (loginLoading) return;
+    setLoginLoading(true);
+    try {
+      const res = await api.conversations.oneClickLogin(conversation.id);
+      const { url, customerEmail } = res.data;
+      const popup = window.open(url, '_blank', 'noopener,noreferrer');
+      if (!popup) {
+        toast.error('Popup blocked — allow popups for this site, then try again.');
+      } else {
+        toast.success(`Customer login opened for ${customerEmail}`);
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to open login link');
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
   // File attachments — stored as File objects, converted to base64 only on send
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const replyRef = useRef<HTMLTextAreaElement>(null);
+  const noteRef = useRef<HTMLTextAreaElement>(null);
+
+  // @mention state
+  const [mention, setMention] = useState<{ open: boolean; query: string; index: number; target: 'reply' | 'note' }>({ open: false, query: '', index: 0, target: 'reply' });
+
+  function getMentionQuery(text: string, cursor: number): string | null {
+    const before = text.slice(0, cursor);
+    const match = before.match(/@([^\s@]*)$/);
+    return match ? match[1] : null;
+  }
+
+  function insertMention(agentName: string, text: string, cursor: number, setter: (v: string) => void, ref: React.RefObject<HTMLTextAreaElement | null>) {
+    const before = text.slice(0, cursor);
+    const after = text.slice(cursor);
+    const replaced = before.replace(/@([^\s@]*)$/, `@${agentName} `);
+    setter(replaced + after);
+    setMention({ open: false, query: '', index: 0, target: 'reply' });
+    setTimeout(() => {
+      if (ref.current) {
+        const pos = replaced.length;
+        ref.current.focus();
+        ref.current.setSelectionRange(pos, pos);
+      }
+    }, 0);
+  }
+
+  const filteredMentions = agentList.filter((a) =>
+    mention.query === '' || a.name.toLowerCase().includes(mention.query.toLowerCase())
+  ).slice(0, 6);
+
+  function handleMentionChange(text: string, cursor: number, target: 'reply' | 'note', setter: (v: string) => void) {
+    setter(text);
+    const q = getMentionQuery(text, cursor);
+    if (q !== null) {
+      if (agentList.length === 0 && !agentListLoading) {
+        setAgentListLoading(true);
+        api.agents.list().then((res) => {
+          const agents: any[] = res.data ?? [];
+          setAgentList(agents.filter((a) => a.status === 'active').map((a: any) => ({
+            id: a.id,
+            name: [a.firstName, a.lastName].filter(Boolean).join(' ').trim() || a.email,
+          })));
+        }).catch(() => {}).finally(() => setAgentListLoading(false));
+      }
+      setMention({ open: true, query: q, index: 0, target });
+    } else {
+      setMention((m) => m.open ? { ...m, open: false } : m);
+    }
+  }
 
   // Stable refs for keyboard handler — avoids stale closures without re-registering listener
   const conversationRef = useRef(conversation);
@@ -161,7 +298,7 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
     if (isSwitch) {
       // Switching to a new conversation — full reset.
       setDraft(""); setToneCheck(null); setTranslatePreview(null);
-      setShowTranslated({}); setMcpResult(null);
+      setShowTranslated({}); setTranslationCache({}); setMcpResult(null);
       setConvTags(conversation.tags ?? []);
       setAttachedFiles([]);
       setLocalAssignedAgent(conversation.assignedAgent ?? null);
@@ -280,8 +417,16 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
           if (!draftRef.current.trim()) { toast.error("Write a reply first"); return; }
           (() => {
             const lang = conversationRef.current.customer.language;
-            if (lang === AGENT_LANG) { toast(`Customer language matches yours.`); return; }
-            setTranslatePreview({ lang, text: `[${LANG_LABELS[lang]} translation] ${draftRef.current}` });
+            if (!lang || lang === AGENT_LANG) { toast(`Customer language matches yours.`); return; }
+            const langName = LANG_ENGLISH[lang] || lang;
+            setTranslating(true);
+            api.ai.compose(conversationRef.current.id, draftRef.current, 'translate', langName)
+              .then((res: any) => {
+                const translated = res?.data?.result;
+                if (translated) setTranslatePreview({ lang, text: translated });
+              })
+              .catch((err: any) => toast.error(err.message || "Translation failed"))
+              .finally(() => setTranslating(false));
           })();
           break;
         case "n":
@@ -308,19 +453,81 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
   const slaLeft = isWaiting ? Math.max(0, conversation.slaMinutes - conversation.waitMinutes) : null;
   const slaTone = slaLeft === null ? "text-muted-foreground" : slaLeft === 0 ? "text-danger" : slaLeft < 5 ? "text-danger" : slaLeft < 15 ? "text-warning" : "text-muted-foreground";
 
-  const autoFill = () => {
+  const autoFill = async () => {
     setAiThinking(true); setToneCheck(null);
-    setTimeout(() => { setDraft(DRAFTS[conversation.id] || "Thanks for reaching out — looking into this now."); setAiThinking(false); }, 800);
+    try {
+      const res = await api.ai.suggest(conversation.id);
+      const suggestions: any[] = res?.data?.suggestions ?? [];
+      const first = suggestions.find((s: any) => s.type === 'text');
+      if (first?.body) {
+        setDraft(first.body);
+        setAiSuggestions(suggestions.slice(1));
+      } else {
+        toast("No AI suggestion available for this conversation.");
+      }
+    } catch {
+      setDraft(DRAFTS[conversation.id] || "Thanks for reaching out — looking into this now.");
+    } finally {
+      setAiThinking(false);
+    }
   };
+
+  const runCompose = async (mode: 'rephrase' | 'formal' | 'friendly' | 'concise' | 'expand') => {
+    if (!draft.trim()) return toast.error("Write a draft first");
+    setShowComposeMenu(false); setComposing(true);
+    try {
+      const res = await api.ai.compose(conversation.id, draft, mode);
+      if (res?.data?.result) setDraft(res.data.result);
+    } catch (err: any) {
+      toast.error(err.message || "Compose failed");
+    } finally {
+      setComposing(false);
+    }
+  };
+
   const runToneCheck = () => {
     if (!draft.trim()) return toast.error("Write a reply first");
-    setToneCheck({ tone: "Professional · Empathetic", suggestion: "Consider opening with the customer's name to warm the tone." });
+    setShowComposeMenu(v => !v);
   };
-  const translateReply = () => {
+
+  // Load AI suggestions + auto-tag when conversation changes
+  useEffect(() => {
+    setAiSuggestions([]);
+    setShowSuggestions(true);
+    setAiTagSuggestions([]);
+    setShowTagBanner(false);
+
+    api.ai.suggest(conversation.id)
+      .then((res: any) => setAiSuggestions(res?.data?.suggestions ?? []))
+      .catch(() => {});
+
+    api.ai.autoTag(conversation.id)
+      .then((res: any) => {
+        const tags: Array<{ id: string; name: string }> = res?.data?.tags ?? [];
+        if (tags.length) { setAiTagSuggestions(tags); setShowTagBanner(true); }
+      })
+      .catch(() => {});
+  }, [conversation.id]);
+  const translateReply = async () => {
     if (!draft.trim()) return toast.error("Write a reply first");
-    const lang = conversation.customer.language;
-    if (lang === AGENT_LANG) return toast(`Customer language matches yours (${LANG_LABELS[lang]}).`);
-    setTranslatePreview({ lang, text: `[${LANG_LABELS[lang]} translation] ${draft}` });
+
+    // Collect last 3 customer messages to give Groq real text for language detection
+    const customerSamples = localMessages
+      .filter((m) => m.from === "customer" && (m.text || m.html))
+      .slice(-3)
+      .map((m) => m.text || m.html?.replace(/<[^>]+>/g, "") || "")
+      .filter(Boolean);
+
+    setTranslating(true);
+    try {
+      const res = await api.ai.translateDraft(conversation.id, draft, customerSamples);
+      const { translated, detectedLanguage } = res?.data ?? {};
+      if (translated) setTranslatePreview({ lang: detectedLanguage || "customer language", text: translated });
+    } catch (err: any) {
+      toast.error(err.message || "Translation failed");
+    } finally {
+      setTranslating(false);
+    }
   };
   const send = async () => {
     if ((!draft.trim() && !attachedFiles.length) || sending) return;
@@ -494,9 +701,17 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
-  const runMcp = () => {
+  const runMcp = async () => {
     if (!suggested) return;
-    setMcpResult(getMcpResponse(suggested, conversation.customer));
+    setMcpLoading(true);
+    try {
+      const res = await api.ai.diagnose(conversation.id, suggested);
+      setMcpResult(res?.data?.diagnostics ?? []);
+    } catch {
+      toast.error("Diagnostic failed — try again");
+    } finally {
+      setMcpLoading(false);
+    }
   };
   const insertMcpIntoReply = () => {
     if (!mcpResult) return;
@@ -528,8 +743,57 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
     }
   };
 
+  const startEditNote = (m: Message) => {
+    setEditingNoteId(m.id);
+    setEditingNoteBody(m.text || m.html?.replace(/<[^>]+>/g, "") || "");
+  };
+
+  const saveEditedNote = async () => {
+    if (!editingNoteId || !editingNoteBody.trim()) return;
+    setSavingNote(true);
+    try {
+      const res = await api.conversations.updateNote(conversation.id, editingNoteId, editingNoteBody.trim());
+      const newPartId = res?.data?.newPartId;
+      setLocalMessages((prev) => prev.map((m) => {
+        if (m.id === editingNoteId) {
+          // Old note is now redacted; update it in-place with new content + new ID
+          return { ...m, id: newPartId ?? m.id, text: editingNoteBody.trim(), html: "", deleted: false };
+        }
+        return m;
+      }));
+      toast.success("Note updated.");
+      setEditingNoteId(null);
+    } catch (err: any) {
+      toast.error(err.message || "Failed to update note");
+    } finally {
+      setSavingNote(false);
+    }
+  };
+
+  const handleDeleteMessage = (partId: string) => setDeleteTarget(partId);
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      await api.conversations.redactMessage(conversation.id, deleteTarget);
+      setLocalMessages((prev) => prev.map((m) =>
+        m.id === deleteTarget ? { ...m, text: "", html: "", deleted: true } : m
+      ));
+      toast.success("Message deleted.");
+      setDeleteTarget(null);
+    } catch (err: any) {
+      toast.error(err.message || "Failed to delete message");
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   return (
-    <section className="flex h-full min-w-0 flex-1 flex-col bg-background">
+    <>
+    <section className="flex h-full min-w-0 flex-1 bg-background overflow-hidden">
+    {/* Main thread column */}
+    <div className="flex flex-1 min-w-0 flex-col h-full">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border bg-card px-4 py-3 md:px-6">
         <div className="min-w-0">
@@ -539,6 +803,22 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
               conversation.status === "open" && "bg-success/15 text-success",
               conversation.status === "pending" && "bg-warning/20 text-warning",
               conversation.status === "closed" && "bg-muted text-muted-foreground")}>{conversation.status}</span>
+            {conversation.sla?.firstReplyBreached && (
+              <span className="inline-flex animate-pulse items-center gap-1 rounded-full bg-danger/15 px-2 py-0.5 text-[10px] font-semibold text-danger">
+                <AlertTriangle className="h-3 w-3" />SLA Breached
+              </span>
+            )}
+            {!conversation.sla?.firstReplyBreached && conversation.sla?.remainingSeconds != null && conversation.sla.remainingSeconds > 0 && (
+              <span className={cn(
+                "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold",
+                conversation.sla.remainingSeconds < 300 ? "bg-danger/10 text-danger" : "bg-warning/15 text-warning"
+              )}>
+                <Clock className="h-3 w-3" />
+                {conversation.sla.remainingSeconds < 60
+                  ? `${conversation.sla.remainingSeconds}s`
+                  : `${Math.round(conversation.sla.remainingSeconds / 60)}m`} left
+              </span>
+            )}
             {clickupTicket && (
               <a href={clickupTaskUrl || `https://app.clickup.com/t/${clickupTicket}`} target="_blank" rel="noreferrer"
                 className="inline-flex items-center gap-1 rounded-md border border-primary/30 bg-primary/5 px-1.5 py-0.5 text-[10px] font-semibold text-primary hover:bg-primary/10">
@@ -852,7 +1132,21 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
               <CheckCheck className="h-4 w-4" />
             </IconBtn>
           ))}
-          <IconBtn label="More"><MoreHorizontal className="h-4 w-4" /></IconBtn>
+          <PriorityDropdown
+            level={localPriorityLevel}
+            onSelect={async (level) => {
+              const prev = localPriorityLevel;
+              setLocalPriorityLevel(level);
+              try {
+                await api.conversations.setPriority(conversation.id, level);
+                onPriorityChange?.(level);
+                toast.success(level === 'none' ? "Priority removed" : `Priority set to ${level}`);
+              } catch (err: unknown) {
+                setLocalPriorityLevel(prev);
+                toast.error(err instanceof Error ? err.message : "Failed to update priority");
+              }
+            }}
+          />
         </div>
       </div>
 
@@ -871,6 +1165,28 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
         </div>
       )}
 
+      {/* Auto-tag banner */}
+      {showTagBanner && aiTagSuggestions.length > 0 && (
+        <div className="flex items-center gap-2 border-b border-violet-200 bg-violet-50 px-4 py-2 text-xs dark:border-violet-900/40 dark:bg-violet-900/10 md:px-6">
+          <Sparkles className="h-3.5 w-3.5 shrink-0 text-violet-500" />
+          <span className="text-violet-700 dark:text-violet-300">AI suggested tags:</span>
+          {aiTagSuggestions.map(t => (
+            <span key={t.id} className="rounded-full bg-violet-100 px-2 py-0.5 font-medium text-violet-700 dark:bg-violet-900/40 dark:text-violet-300">{t.name}</span>
+          ))}
+          <button
+            onClick={async () => {
+              try {
+                await api.ai.applyTags(conversation.id, aiTagSuggestions.map(t => t.id));
+                toast.success("Tags applied");
+                setShowTagBanner(false);
+              } catch (err: any) { toast.error(err.message); }
+            }}
+            className="ml-auto rounded-md bg-violet-600 px-2 py-0.5 font-medium text-white hover:bg-violet-700"
+          >Apply</button>
+          <button onClick={() => setShowTagBanner(false)} className="text-muted-foreground hover:text-foreground"><X className="h-3 w-3" /></button>
+        </div>
+      )}
+
       {/* Suggested diagnostic */}
       {suggested && (
         <div className="border-b border-border bg-primary/5 px-4 py-2 md:px-6">
@@ -880,9 +1196,10 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
             <div className="ml-auto flex shrink-0 items-center gap-1">
               <button
                 onClick={mcpResult ? () => setMcpResult(null) : runMcp}
-                className="rounded-md bg-primary px-2 py-0.5 text-[11px] font-semibold text-primary-foreground hover:bg-primary/90"
+                disabled={mcpLoading}
+                className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-0.5 text-[11px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
               >
-                {mcpResult ? "Close" : "Run"}
+                {mcpLoading ? <><Loader2 className="h-3 w-3 animate-spin" />Running…</> : mcpResult ? "Close" : "Run"}
               </button>
             </div>
           </div>
@@ -914,15 +1231,76 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
         <div className="mx-auto flex max-w-2xl flex-col gap-4">
           {localMessages.map((m) => {
             if (m.from === "note") return can('notes:view') ? (
-              <div key={m.id} id={`msg-${m.id}`} className="mx-auto w-full max-w-[88%] rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-xs">
+              <div key={m.id} id={`msg-${m.id}`} className="group mx-auto w-full max-w-[88%] rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-xs">
                 <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-warning">
-                  <StickyNote className="h-3 w-3" /> Internal note · {m.author} · {m.time}
+                  <StickyNote className="h-3 w-3" />
+                  Internal note · {m.author} · {m.time}
+                  {m.deleted ? (
+                    <span className="ml-auto italic font-normal normal-case text-muted-foreground/60 flex items-center gap-1">
+                      <Trash2 className="h-3 w-3" /> Deleted
+                    </span>
+                  ) : (
+                    <div className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button className="rounded p-0.5 text-warning/60 hover:text-warning hover:bg-warning/10">
+                            <MoreHorizontal className="h-3.5 w-3.5" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-36">
+                          <DropdownMenuItem onClick={() => startEditNote(m)}>
+                            Edit note
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => {
+                              const text = m.text || m.html?.replace(/<[^>]+>/g, "") || "";
+                              navigator.clipboard.writeText(text).then(() => toast.success("Copied")).catch(() => toast.error("Copy failed"));
+                            }}
+                          >
+                            Copy note
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            className="text-destructive focus:text-destructive"
+                            onClick={() => handleDeleteMessage(m.id)}
+                          >
+                            <Trash2 className="mr-2 h-3.5 w-3.5" />
+                            Delete
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  )}
                 </div>
-                {m.html ? (
-                  <div
-                    className="mt-1 im-body im-body--customer"
-                    dangerouslySetInnerHTML={{ __html: m.html }}
-                  />
+
+                {editingNoteId === m.id ? (
+                  <div className="mt-2 flex flex-col gap-2">
+                    <textarea
+                      autoFocus
+                      value={editingNoteBody}
+                      onChange={(e) => setEditingNoteBody(e.target.value)}
+                      rows={3}
+                      className="w-full rounded border border-border bg-background px-2 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-warning/50 resize-none"
+                    />
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={saveEditedNote}
+                        disabled={savingNote || !editingNoteBody.trim()}
+                        className="inline-flex items-center gap-1 rounded bg-warning px-2.5 py-1 text-[10px] font-semibold text-warning-foreground disabled:opacity-50"
+                      >
+                        {savingNote && <Loader2 className="h-3 w-3 animate-spin" />}
+                        {savingNote ? "Saving…" : "Save"}
+                      </button>
+                      <button
+                        onClick={() => setEditingNoteId(null)}
+                        disabled={savingNote}
+                        className="rounded px-2.5 py-1 text-[10px] font-medium text-muted-foreground hover:bg-muted"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : m.deleted ? null : m.html ? (
+                  <div className="mt-1 im-body im-body--customer" dangerouslySetInnerHTML={{ __html: m.html }} />
                 ) : (
                   <p className="mt-1 leading-relaxed text-foreground/85">
                     {m.text.split(/(\s)/).map((part, i) => part.startsWith("@") ?
@@ -932,43 +1310,116 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
                 <MessageAttachments attachments={m.attachments} isAgent={false} />
               </div>
             ) : null;
-            const translated = showTranslated[m.id];
-            const langDifferent = m.from === "customer" && m.language && m.language !== AGENT_LANG;
             const isAgent = m.from === "agent";
+            const isCustomer = m.from === "customer";
+            const tlEntry = translationCache[m.id];
+            const showTl = showTranslated[m.id];
+
+            const handleTranslate = async () => {
+              if (showTl) { setShowTranslated((p) => ({ ...p, [m.id]: false })); return; }
+              if (tlEntry?.text) { setShowTranslated((p) => ({ ...p, [m.id]: true })); return; }
+              const msgText = m.text || "";
+              if (!msgText.trim()) return;
+              setTranslationCache((p) => ({ ...p, [m.id]: { text: "", lang: "", loading: true } }));
+              setShowTranslated((p) => ({ ...p, [m.id]: true }));
+              try {
+                const res = await api.ai.translate(msgText);
+                const { translated, detectedLanguage, isEnglish } = res?.data ?? {};
+                if (isEnglish) {
+                  setTranslationCache((p) => ({ ...p, [m.id]: { text: "", lang: "en", loading: false } }));
+                  toast("Message is already in English");
+                  setShowTranslated((p) => ({ ...p, [m.id]: false }));
+                } else {
+                  setTranslationCache((p) => ({ ...p, [m.id]: { text: translated, lang: detectedLanguage, loading: false } }));
+                }
+              } catch {
+                setTranslationCache((p) => ({ ...p, [m.id]: { text: "", lang: "", loading: false } }));
+                setShowTranslated((p) => ({ ...p, [m.id]: false }));
+                toast.error("Translation failed");
+              }
+            };
+
             return (
-              <div key={m.id} id={`msg-${m.id}`} className={cn("flex gap-2.5", isAgent && "flex-row-reverse")}>
+              <div key={m.id} id={`msg-${m.id}`} className={cn("group flex gap-2.5", isAgent && "flex-row-reverse")}>
                 <div
                   title={isAgent ? (m.author === currentUserName ? `You · ${m.author}` : (m.author || "Agent")) : conversation.customer.name}
                   className={cn("flex h-7 w-7 shrink-0 cursor-default items-center justify-center rounded-full text-[10px] font-semibold",
                     !isAgent ? "bg-gradient-to-br from-primary/80 to-primary text-primary-foreground" : "bg-foreground text-background")}>
                   {!isAgent ? conversation.customer.initials : nameInitials(m.author || "Agent")}
                 </div>
-                <div className={cn("max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed",
+                <div className={cn("relative max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed",
                   !isAgent ? "rounded-tl-sm bg-card text-foreground shadow-sm ring-1 ring-border" : "rounded-tr-sm bg-primary text-primary-foreground")}>
-                  {langDifferent && (
+                  {/* Translate button — visible on all customer messages */}
+                  {isCustomer && (
                     <div className="mb-1 flex items-center gap-1">
-                      <span className="rounded bg-muted px-1.5 py-0 text-[9px] font-semibold uppercase text-muted-foreground">{m.language}</span>
-                      <button onClick={() => setShowTranslated({ ...showTranslated, [m.id]: !translated })}
-                        className="inline-flex items-center gap-0.5 rounded px-1.5 py-0 text-[10px] font-medium text-primary hover:bg-primary/10">
-                        <Languages className="h-2.5 w-2.5" /> {translated ? "Show original" : "Translate"}
+                      {tlEntry?.lang && tlEntry.lang !== "en" && (
+                        <span className="rounded bg-muted px-1.5 py-0 text-[9px] font-semibold uppercase text-muted-foreground">
+                          {tlEntry.lang}
+                        </span>
+                      )}
+                      <button
+                        onClick={handleTranslate}
+                        disabled={tlEntry?.loading}
+                        className="inline-flex items-center gap-0.5 rounded px-1.5 py-0 text-[10px] font-medium text-primary hover:bg-primary/10 disabled:opacity-50"
+                      >
+                        <Languages className="h-2.5 w-2.5" />
+                        {tlEntry?.loading ? "Translating…" : showTl && tlEntry?.text ? "Show original" : "Translate"}
                       </button>
                     </div>
                   )}
-                  {m.html ? (
+
+                  {m.deleted ? (
+                    <span className={cn("flex items-center gap-1 text-xs italic", isAgent ? "text-primary-foreground/50" : "text-muted-foreground/60")}>
+                      <Trash2 className="h-3 w-3 shrink-0" />
+                      Message deleted
+                    </span>
+                  ) : showTl && tlEntry?.text ? (
+                    <LinkifiedText text={tlEntry.text} isAgent={isAgent} />
+                  ) : m.html ? (
                     <div
                       className={cn("im-body", isAgent ? "im-body--agent" : "im-body--customer")}
                       dangerouslySetInnerHTML={{ __html: m.html }}
                     />
-                  ) : (translated && m.translation ? m.translation : m.text) ? (
-                    <LinkifiedText text={translated && m.translation ? m.translation : m.text} isAgent={isAgent} />
+                  ) : m.text ? (
+                    <LinkifiedText text={m.text} isAgent={isAgent} />
                   ) : null}
-                  {translated && m.translation && (
-                    <div className="mt-1 text-[10px] italic text-muted-foreground">Translated from {LANG_LABELS[m.language!] || m.language}</div>
+
+                  {showTl && tlEntry?.text && (
+                    <div className="mt-1 text-[10px] italic text-muted-foreground">
+                      Translated from {tlEntry.lang}
+                    </div>
                   )}
                   <MessageAttachments attachments={m.attachments} isAgent={isAgent} />
                   <div className={cn("mt-1 flex items-center gap-1 text-[10px]", !isAgent ? "text-muted-foreground" : "text-primary-foreground/70")}>
                     <span>{m.time}</span>
                     {isAgent && m.read && <CheckCheck className="h-3 w-3" />}
+                    <span className="flex-1" />
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button className={cn("rounded p-0.5 opacity-0 group-hover:opacity-100 transition-opacity", isAgent ? "hover:bg-primary-foreground/10" : "hover:bg-muted")}>
+                          <MoreHorizontal className="h-3 w-3" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-36">
+                        <DropdownMenuItem
+                          onClick={() => {
+                            const text = m.text || m.html?.replace(/<[^>]+>/g, "") || "";
+                            navigator.clipboard.writeText(text).then(() => toast.success("Copied")).catch(() => toast.error("Copy failed"));
+                          }}
+                        >
+                          Copy message
+                        </DropdownMenuItem>
+                        {isAgent && !m.deleted && (
+                          <DropdownMenuItem
+                            className="text-destructive focus:text-destructive"
+                            onClick={() => handleDeleteMessage(m.id)}
+                          >
+                            <Trash2 className="mr-2 h-3.5 w-3.5" />
+                            Delete
+                          </DropdownMenuItem>
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
                 </div>
               </div>
@@ -983,9 +1434,21 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
           <div className="mb-2 rounded-md border border-warning/40 bg-warning/5 p-2">
             <div className="mb-1 text-[10px] font-semibold uppercase text-warning">Add internal note (not sent to customer)</div>
             <textarea
+              ref={noteRef}
               value={noteVal}
-              onChange={(e) => setNoteVal(e.target.value)}
+              onChange={(e) => handleMentionChange(e.target.value, e.target.selectionStart, 'note', setNoteVal)}
               onKeyDown={(e) => {
+                if (mention.open && mention.target === 'note' && filteredMentions.length > 0) {
+                  if (e.key === 'ArrowDown') { e.preventDefault(); setMention((m) => ({ ...m, index: Math.min(m.index + 1, filteredMentions.length - 1) })); return; }
+                  if (e.key === 'ArrowUp') { e.preventDefault(); setMention((m) => ({ ...m, index: Math.max(m.index - 1, 0) })); return; }
+                  if (e.key === 'Enter' || e.key === 'Tab') {
+                    e.preventDefault();
+                    const a = filteredMentions[mention.index];
+                    if (a) insertMention(a.name, noteVal, noteRef.current?.selectionStart ?? noteVal.length, setNoteVal, noteRef);
+                    return;
+                  }
+                  if (e.key === 'Escape') { setMention((m) => ({ ...m, open: false })); return; }
+                }
                 if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); addNote(); }
                 if (e.key === "Escape") { setShowNote(false); }
               }}
@@ -1113,6 +1576,40 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
             </div>
           </>
         )}
+        {/* AI suggestions chips */}
+        {aiSuggestions.length > 0 && showSuggestions && (
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {aiSuggestions.map((s, i) => (
+              <button
+                key={i}
+                onClick={() => { if (s.type === 'text' && s.body) setDraft(s.body); setShowSuggestions(false); }}
+                className="flex items-center gap-1 rounded-full border border-primary/30 bg-primary/5 px-2.5 py-1 text-[11px] text-primary hover:bg-primary/10 max-w-[240px] truncate"
+              >
+                <Sparkles className="h-3 w-3 shrink-0" />
+                {s.type === 'macro' ? `Apply: ${s.macroName}` : s.body?.slice(0, 60)}
+              </button>
+            ))}
+            <button onClick={() => setShowSuggestions(false)} title="Hide suggestions" className="rounded-full px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted"><X className="h-3 w-3" /></button>
+          </div>
+        )}
+
+        {/* Compose mode picker */}
+        {showComposeMenu && (
+          <div className="mb-2 flex items-center gap-1 flex-wrap">
+            {(['rephrase', 'formal', 'friendly', 'concise', 'expand'] as const).map(mode => (
+              <button
+                key={mode}
+                onClick={() => runCompose(mode)}
+                disabled={composing}
+                className="rounded-full border border-border px-2.5 py-1 text-[11px] capitalize hover:bg-muted disabled:opacity-50"
+              >
+                {composing ? <Loader2 className="h-3 w-3 animate-spin" /> : mode}
+              </button>
+            ))}
+            <button onClick={() => setShowComposeMenu(false)} className="rounded-full px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted"><X className="h-3 w-3" /></button>
+          </div>
+        )}
+
         {toneCheck && (
           <div className="mb-2 flex items-start gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs">
             <Sparkles className="mt-0.5 h-3.5 w-3.5 text-primary" />
@@ -1124,9 +1621,19 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
         )}
         {translatePreview && (
           <div className="mb-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs">
-            <div className="mb-1 flex items-center gap-1 font-medium text-primary"><Languages className="h-3 w-3" /> Translation preview · {LANG_LABELS[translatePreview.lang]}</div>
+            <div className="mb-1 flex items-center justify-between gap-1">
+              <span className="flex items-center gap-1 font-medium text-primary">
+                <Languages className="h-3 w-3" /> Translation preview · {LANG_LABELS[translatePreview.lang] || translatePreview.lang}
+              </span>
+              <button
+                onClick={() => setTranslatePreview(null)}
+                title="Dismiss — send original instead"
+                className="rounded p-0.5 text-muted-foreground hover:bg-primary/10 hover:text-foreground"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
             <p className="leading-relaxed text-foreground/85">{translatePreview.text}</p>
-            <button onClick={() => setTranslatePreview(null)} className="mt-1 text-[10px] text-muted-foreground hover:text-foreground">Use original instead</button>
           </div>
         )}
         {/* Hidden file input */}
@@ -1151,13 +1658,52 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
             ))}
           </div>
         )}
+        {/* @mention dropdown */}
+        {mention.open && filteredMentions.length > 0 && (
+          <div className="mb-1 rounded-md border border-border bg-popover shadow-lg overflow-hidden">
+            {agentListLoading ? (
+              <div className="flex items-center gap-1.5 px-3 py-2 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" /> Loading…</div>
+            ) : (
+              filteredMentions.map((a, i) => (
+                <button
+                  key={a.id}
+                  className={cn("flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-accent", i === mention.index && "bg-accent")}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    const isReply = mention.target === 'reply';
+                    const ref = isReply ? replyRef : noteRef;
+                    const text = isReply ? draft : noteVal;
+                    const cursor = ref.current?.selectionStart ?? text.length;
+                    insertMention(a.name, text, cursor, isReply ? setDraft : setNoteVal, ref);
+                  }}
+                >
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-bold text-primary">
+                    {a.name.charAt(0).toUpperCase()}
+                  </span>
+                  <span className="font-medium">{a.name}</span>
+                </button>
+              ))
+            )}
+          </div>
+        )}
         <div className={cn("rounded-lg border border-border bg-background", can('conversations:reply') && "focus-within:border-primary/60 focus-within:ring-2 focus-within:ring-primary/15")}>
           {can('conversations:reply') ? (
             <textarea
               ref={replyRef}
               value={draft}
-              onChange={(e) => setDraft(e.target.value)}
+              onChange={(e) => handleMentionChange(e.target.value, e.target.selectionStart, 'reply', setDraft)}
               onKeyDown={(e) => {
+                if (mention.open && filteredMentions.length > 0) {
+                  if (e.key === 'ArrowDown') { e.preventDefault(); setMention((m) => ({ ...m, index: Math.min(m.index + 1, filteredMentions.length - 1) })); return; }
+                  if (e.key === 'ArrowUp') { e.preventDefault(); setMention((m) => ({ ...m, index: Math.max(m.index - 1, 0) })); return; }
+                  if (e.key === 'Enter' || e.key === 'Tab') {
+                    e.preventDefault();
+                    const a = filteredMentions[mention.index];
+                    if (a) insertMention(a.name, draft, replyRef.current?.selectionStart ?? draft.length, setDraft, replyRef);
+                    return;
+                  }
+                  if (e.key === 'Escape') { setMention((m) => ({ ...m, open: false })); return; }
+                }
                 if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
                 if (e.key === "Escape") { setDraft(""); setToneCheck(null); setTranslatePreview(null); }
               }}
@@ -1174,8 +1720,17 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
                   {aiThinking ? <><Sparkles className="h-3.5 w-3.5 animate-pulse text-primary" /> Drafting…</> : <><Sparkles className="h-3.5 w-3.5 text-primary" /> Auto-Fill</>}
                 </ComposerBtn>
               )}
-              {can('conversations:reply') && <ComposerBtn onClick={runToneCheck}><Wand2 className="h-3.5 w-3.5" /> Tone</ComposerBtn>}
-              {can('conversations:reply') && <ComposerBtn onClick={translateReply}><Languages className="h-3.5 w-3.5" /> Translate</ComposerBtn>}
+              {can('conversations:reply') && aiSuggestions.length > 0 && !showSuggestions && (
+                <ComposerBtn onClick={() => setShowSuggestions(true)} title="Show AI suggestions">
+                  <Sparkles className="h-3.5 w-3.5 text-primary" /> Suggestions
+                </ComposerBtn>
+              )}
+              {can('conversations:reply') && <ComposerBtn onClick={runToneCheck}><Wand2 className="h-3.5 w-3.5" /> Compose</ComposerBtn>}
+              {can('conversations:reply') && (
+                <ComposerBtn onClick={translateReply} disabled={translating}>
+                  {translating ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Translating…</> : <><Languages className="h-3.5 w-3.5" /> Translate</>}
+                </ComposerBtn>
+              )}
               {can('macros:apply') && <ComposerBtn onClick={() => { setShowCanned(!showCanned); setShowArticles(false); }}><FileText className="h-3.5 w-3.5" /> Macros</ComposerBtn>}
               {can('articles:view') && <ComposerBtn onClick={() => { setShowArticles(!showArticles); setShowCanned(false); }}><BookOpen className="h-3.5 w-3.5" /> Articles</ComposerBtn>}
               {can('notes:create') && <ComposerBtn onClick={() => setShowNote(true)}><StickyNote className="h-3.5 w-3.5 text-warning" /> Note</ComposerBtn>}
@@ -1184,7 +1739,6 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
                   <Paperclip className="h-3.5 w-3.5" />
                 </ComposerBtn>
               )}
-              {can('notes:create') && <ComposerBtn onClick={() => toast("Mention @teammate inside a note")}><AtSign className="h-3.5 w-3.5" /></ComposerBtn>}
             </div>
             <div className="relative flex items-center gap-1.5">
               {/* Keyboard shortcuts popover — fixed so it escapes overflow:hidden parents */}
@@ -1304,7 +1858,14 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
 
         {/* Quick actions */}
         <div className="mt-3 flex flex-wrap gap-1.5">
-          <QuickAction icon={<ExternalLink className="h-3 w-3" />} onClick={() => toast.success("One-click login token issued (15-min). Logged.")}>One-Click Login</QuickAction>
+          {can('conversations:one_click_login') && (
+            <QuickAction
+              icon={loginLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <ExternalLink className="h-3 w-3" />}
+              onClick={handleOneClickLogin}
+            >
+              {loginLoading ? 'Opening…' : 'One-Click Login'}
+            </QuickAction>
+          )}
           <QuickAction icon={<CreditCard className="h-3 w-3" />} onClick={() => toast.success("Opening Stripe customer page. Logged.")}>One-Click Stripe</QuickAction>
           {can('clickup:link') && (
             <QuickAction icon={<ClipboardList className="h-3 w-3" />} onClick={() => setClickupOpen(true)}>
@@ -1323,12 +1884,80 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
         existingTaskUrl={clickupTaskUrl}
         onCreated={(ticket, taskUrl) => { onLinkClickup?.(ticket, taskUrl); setClickupOpen(false); toast.success(`Created ${ticket} in ClickUp`); }}
       />
+    </div>
+
     </section>
+
+    {/* Floating AI Copilot bubble — fixed bottom-right, outside overflow-hidden section */}
+    <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3">
+      {showCopilot && (
+        <div
+          className="w-[380px] overflow-hidden rounded-2xl shadow-2xl"
+          style={{ height: 520, animation: "copilotSlideIn 0.2s ease" }}
+        >
+          <AiCopilotPanel
+            conversationId={conversation.id}
+            onUseDraft={(text) => setDraft(text)}
+            onClose={() => setShowCopilot(false)}
+          />
+        </div>
+      )}
+      <button
+        onClick={() => setShowCopilot(v => !v)}
+        className={cn(
+          "flex h-14 w-14 items-center justify-center rounded-full shadow-xl transition-all duration-200 hover:scale-105 active:scale-95",
+          showCopilot
+            ? "bg-gradient-to-br from-indigo-600 to-violet-700 ring-4 ring-indigo-400/30"
+            : "bg-gradient-to-br from-indigo-500 to-violet-600 ring-4 ring-transparent hover:ring-indigo-400/30"
+        )}
+        title="AI Copilot"
+      >
+        {showCopilot
+          ? <X className="h-6 w-6 text-white" />
+          : <Sparkles className="h-6 w-6 text-white" />}
+      </button>
+    </div>
+    <style>{`
+      @keyframes copilotSlideIn {
+        from { opacity: 0; transform: translateY(12px) scale(0.97); }
+        to   { opacity: 1; transform: translateY(0) scale(1); }
+      }
+    `}</style>
+
+    {/* Delete message confirmation dialog */}
+    <Dialog open={!!deleteTarget} onOpenChange={(o) => { if (!o && !deleting) setDeleteTarget(null); }}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Delete message?</DialogTitle>
+        </DialogHeader>
+        <p className="text-sm text-muted-foreground">
+          This will permanently remove the message content. This action cannot be undone.
+        </p>
+        <DialogFooter className="gap-2 pt-2">
+          <button
+            onClick={() => setDeleteTarget(null)}
+            disabled={deleting}
+            className="rounded-md border border-border px-4 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={confirmDelete}
+            disabled={deleting}
+            className="rounded-md bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50 flex items-center gap-2"
+          >
+            {deleting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            {deleting ? "Deleting…" : "Delete"}
+          </button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }
 
-function IconBtn({ children, label, onClick }: { children: React.ReactNode; label: string; onClick?: () => void }) {
-  return <button onClick={onClick} title={label} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground">{children}</button>;
+function IconBtn({ children, label, onClick, className }: { children: React.ReactNode; label: string; onClick?: () => void; className?: string }) {
+  return <button onClick={onClick} title={label} className={cn("inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground", className)}>{children}</button>;
 }
 function ComposerBtn({ children, ...p }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
   return <button {...p} className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-foreground/80 transition hover:bg-muted hover:text-foreground disabled:opacity-50">{children}</button>;
@@ -1454,45 +2083,266 @@ function AttachmentImage({ a }: { a: MessageAttachment }) {
   );
 }
 
-function MessageAttachments({ attachments, isAgent }: { attachments?: MessageAttachment[]; isAgent: boolean }) {
-  if (!attachments?.length) return null;
+function buildProxyUrl(rawUrl: string): string {
+  const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:5000').replace(/\/$/, '');
+  return `${API_BASE}/api/v1/conversations/attachment-proxy?url=${encodeURIComponent(rawUrl)}`;
+}
+
+function getProxyHeaders(): HeadersInit {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function AttachmentPreviewModal({ attachment, onClose }: { attachment: MessageAttachment | null; onClose: () => void }) {
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [blobLoading, setBlobLoading] = useState(false);
+  const [textContent, setTextContent] = useState<string | null>(null);
+  const [textLoading, setTextLoading] = useState(false);
+  const [textError, setTextError] = useState(false);
+
+  const ct = (attachment?.contentType ?? "").toLowerCase();
+  const name = attachment?.name ?? "";
+  const ext = name.includes(".") ? name.split(".").pop()?.toLowerCase() ?? "" : "";
+
+  const isPdf   = ct.includes("pdf")  || ext === "pdf";
+  const isCsv   = ct.includes("csv")  || ext === "csv";
+  const isAudio = ct.startsWith("audio/") || ["mp3","wav","ogg","m4a","aac","flac"].includes(ext);
+  const isImage = ct.startsWith("image/") || ["jpg","jpeg","png","gif","webp","svg","bmp"].includes(ext);
+  const isVideo = ct.startsWith("video/") || ["mp4","webm","mov","mkv","avi"].includes(ext);
+  const isText  = !isCsv && (ct.startsWith("text/") || ct === "application/json" || ["txt","json","xml","md","log","yaml","yml"].includes(ext));
+
+  // PDF, audio, image, video in modal → fetch via proxy → blob URL (avoids CORS & X-Frame-Options)
+  const needsBlob = isPdf || isAudio || isImage || isVideo;
+  useEffect(() => {
+    if (!attachment || !needsBlob) { setBlobUrl(null); return; }
+    let objectUrl: string | null = null;
+    setBlobLoading(true);
+    fetch(buildProxyUrl(attachment.url), { headers: getProxyHeaders() })
+      .then((r) => r.blob())
+      .then((blob) => { objectUrl = URL.createObjectURL(blob); setBlobUrl(objectUrl); })
+      .catch(() => setBlobUrl(null))
+      .finally(() => setBlobLoading(false));
+    return () => { if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [attachment?.url, needsBlob]);
+
+  // Text / CSV → fetch as text via proxy
+  useEffect(() => {
+    if (!attachment || (!isText && !isCsv)) { setTextContent(null); return; }
+    setTextLoading(true);
+    setTextError(false);
+    fetch(buildProxyUrl(attachment.url), { headers: getProxyHeaders() })
+      .then((r) => r.text())
+      .then((t) => setTextContent(t))
+      .catch(() => setTextError(true))
+      .finally(() => setTextLoading(false));
+  }, [attachment?.url, isText, isCsv]);
+
+  const csvRows: string[][] = useMemo(() => {
+    if (!isCsv || !textContent) return [];
+    return textContent.trim().split("\n").map((row) => row.split(","));
+  }, [isCsv, textContent]);
+
+  if (!attachment) return null;
+
+  const loading = blobLoading || textLoading;
+
   return (
-    <div className="mt-2 flex flex-col gap-2">
-      {attachments.map((a, i) => {
-        const ct = a.contentType || "";
-        if (ct.startsWith("image/")) {
-          return <AttachmentImage key={i} a={a} />;
-        }
-        if (ct.startsWith("video/")) {
-          return (
-            <video key={i} controls className="max-h-48 max-w-full rounded-lg" style={{ maxWidth: "min(320px, 100%)" }}>
-              <source src={a.url} type={ct} />
-              <a href={a.url} target="_blank" rel="noreferrer" className="underline text-xs">
-                {a.name}
-              </a>
-            </video>
-          );
-        }
-        // generic file / PDF / etc.
-        return (
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="flex max-h-[90vh] max-w-4xl flex-col gap-0 p-0">
+        <DialogHeader className="flex flex-row items-center gap-3 border-b px-4 py-3 pr-12">
+          <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <DialogTitle className="flex-1 truncate text-left text-sm font-medium">{name}</DialogTitle>
           <a
-            key={i}
-            href={a.url}
+            href={attachment.url}
             target="_blank"
             rel="noreferrer"
-            className={cn(
-              "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition",
-              isAgent
-                ? "border-primary-foreground/30 text-primary-foreground hover:bg-primary-foreground/10"
-                : "border-border text-foreground hover:bg-muted"
-            )}
+            className="shrink-0 inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium hover:bg-muted transition"
           >
-            <ExternalLink className="h-3 w-3 shrink-0" />
-            {a.name}
+            <ExternalLink className="h-3 w-3" />
+            Open
           </a>
-        );
-      })}
+        </DialogHeader>
+
+        <div className="flex-1 overflow-hidden">
+          {loading && (
+            <div className="flex items-center justify-center py-16 text-xs text-muted-foreground">Loading…</div>
+          )}
+
+          {/* PDF */}
+          {isPdf && !loading && (
+            blobUrl
+              ? <iframe src={blobUrl} className="h-full w-full" style={{ minHeight: "70vh" }} title={name} />
+              : <PreviewUnavailable label="Could not load PDF" url={attachment.url} />
+          )}
+
+          {/* Image */}
+          {isImage && !loading && (
+            blobUrl
+              ? <div className="flex items-center justify-center overflow-auto p-4" style={{ minHeight: "60vh" }}>
+                  <img src={blobUrl} alt={name} className="max-h-[70vh] max-w-full object-contain rounded" />
+                </div>
+              : <PreviewUnavailable label="Could not load image" url={attachment.url} />
+          )}
+
+          {/* Video */}
+          {isVideo && !loading && (
+            blobUrl
+              ? <div className="flex items-center justify-center p-4" style={{ minHeight: "60vh" }}>
+                  <video controls className="max-h-[70vh] max-w-full rounded">
+                    <source src={blobUrl} type={ct || undefined} />
+                  </video>
+                </div>
+              : <PreviewUnavailable label="Could not load video" url={attachment.url} />
+          )}
+
+          {/* Audio */}
+          {isAudio && !loading && (
+            blobUrl
+              ? <div className="flex items-center justify-center p-8" style={{ minHeight: "20vh" }}>
+                  <audio controls src={blobUrl} className="w-full max-w-lg" />
+                </div>
+              : <PreviewUnavailable label="Could not load audio" url={attachment.url} />
+          )}
+
+          {/* Plain text / JSON / XML / Markdown */}
+          {isText && !isCsv && !loading && (
+            <div className="h-full overflow-auto p-4" style={{ minHeight: "60vh" }}>
+              {textError && <p className="text-xs text-destructive">Could not load file content.</p>}
+              {textContent !== null && (
+                <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-foreground">
+                  {textContent}
+                </pre>
+              )}
+            </div>
+          )}
+
+          {/* CSV */}
+          {isCsv && !loading && (
+            <div className="overflow-auto p-4" style={{ minHeight: "60vh" }}>
+              {textError && <p className="text-xs text-destructive">Could not load file content.</p>}
+              {csvRows.length > 0 && (
+                <table className="w-full border-collapse text-xs">
+                  <thead>
+                    <tr>
+                      {csvRows[0].map((cell, ci) => (
+                        <th key={ci} className="border border-border bg-muted px-2 py-1 text-left font-medium text-muted-foreground">
+                          {cell.trim()}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {csvRows.slice(1).map((row, ri) => (
+                      <tr key={ri} className="even:bg-muted/30">
+                        {row.map((cell, ci) => (
+                          <td key={ci} className="border border-border px-2 py-1">{cell.trim()}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
+
+          {/* Unsupported — download only */}
+          {!isPdf && !isImage && !isVideo && !isAudio && !isText && !isCsv && !loading && (
+            <PreviewUnavailable
+              label={ext ? `No preview for .${ext} files` : "Preview not available"}
+              url={attachment.url}
+            />
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function PreviewUnavailable({ label, url }: { label: string; url: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-3 py-16" style={{ minHeight: "40vh" }}>
+      <FileText className="h-10 w-10 text-muted-foreground/50" />
+      <p className="text-sm text-muted-foreground">{label}</p>
+      <a
+        href={url}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition"
+      >
+        <ExternalLink className="h-3 w-3" />
+        Download file
+      </a>
     </div>
+  );
+}
+
+function MessageAttachments({ attachments, isAgent }: { attachments?: MessageAttachment[]; isAgent: boolean }) {
+  const [previewing, setPreviewing] = useState<MessageAttachment | null>(null);
+
+  if (!attachments?.length) return null;
+  return (
+    <>
+      <div className="mt-2 flex flex-col gap-2">
+        {attachments.map((a, i) => {
+          const ct = a.contentType || "";
+          if (ct.startsWith("image/")) {
+            return <AttachmentImage key={i} a={a} />;
+          }
+          if (ct.startsWith("video/")) {
+            return (
+              <video key={i} controls className="max-h-48 max-w-full rounded-lg" style={{ maxWidth: "min(320px, 100%)" }}>
+                <source src={a.url} type={ct} />
+                <a href={a.url} target="_blank" rel="noreferrer" className="underline text-xs">{a.name}</a>
+              </video>
+            );
+          }
+          // non-image, non-video: show filename + preview button
+          return (
+            <div
+              key={i}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium",
+                isAgent
+                  ? "border-primary-foreground/30 text-primary-foreground"
+                  : "border-border text-foreground"
+              )}
+            >
+              <Paperclip className="h-3 w-3 shrink-0 opacity-60" />
+              <span className="max-w-[200px] truncate">{a.name}</span>
+              <div className="ml-1 flex items-center gap-1">
+                <button
+                  onClick={() => setPreviewing(a)}
+                  title="Preview"
+                  className={cn(
+                    "rounded p-0.5 transition",
+                    isAgent
+                      ? "hover:bg-primary-foreground/20 text-primary-foreground/80"
+                      : "hover:bg-muted text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  <Eye className="h-3 w-3" />
+                </button>
+                <a
+                  href={a.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  title="Open in new tab"
+                  className={cn(
+                    "rounded p-0.5 transition",
+                    isAgent
+                      ? "hover:bg-primary-foreground/20 text-primary-foreground/80"
+                      : "hover:bg-muted text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <AttachmentPreviewModal attachment={previewing} onClose={() => setPreviewing(null)} />
+    </>
   );
 }
 

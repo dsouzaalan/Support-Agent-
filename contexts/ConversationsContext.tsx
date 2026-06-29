@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { useConversations } from "@/hooks/useConversations";
 import { useSSE } from "@/hooks/useSSE";
 import type { Conversation, ConvStatus } from "@/lib/mock-data";
@@ -41,16 +41,23 @@ export function ConversationsProvider({ children }: { children: React.ReactNode 
   const [latestUpdate, setLatestUpdate] = useState<Conversation | null>(null);
   const [composingContact, setComposingContact] = useState<ComposingContact | null>(null);
 
+  // Keep a ref to conversations so SSE callbacks can compare prev vs new without stale closures
+  const conversationsRef = useRef(conversations);
+  useEffect(() => { conversationsRef.current = conversations; }, [conversations]);
+
   const linkClickup = useCallback((id: string, ticket: string, taskUrl: string) => {
     setClickupLinks((s) => ({ ...s, [id]: { ticket, taskUrl } }));
   }, []);
 
   useSSE({
     onConversationUpdate: useCallback((conv: Conversation) => {
+      const prev = conversationsRef.current.find((c) => c.id === conv.id);
       upsertConversation(conv);
       setLatestUpdate(conv);
-      // Don't toast for closed — the conversation page handles navigation + its own toast
-      if (conv.status !== "closed") {
+      if (prev && prev.isHighPriority !== conv.isHighPriority) {
+        toast.info(conv.isHighPriority ? "Conversation marked as priority" : "Conversation priority removed", { duration: 3000 });
+      } else if (conv.status !== "closed") {
+        // Don't toast for closed — the conversation page handles navigation + its own toast
         toast.info("Conversation updated", { duration: 2000 });
       }
     }, [upsertConversation]),

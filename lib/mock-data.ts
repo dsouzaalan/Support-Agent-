@@ -1,7 +1,8 @@
+export type PriorityLevel = 'none' | 'low' | 'medium' | 'high' | 'urgent';
 export type Sentiment = "positive" | "neutral" | "negative";
 export type ChurnRisk = "low" | "medium" | "high";
 export type TierType = "Platinum" | "Gold" | "Silver" | "New";
-export type ConvStatus = "open" | "pending" | "closed";
+export type ConvStatus = "open" | "pending" | "closed" | "spam";
 export type Trajectory = "Expanding" | "Stable" | "Contracting";
 export type AccountStatus = "Healthy" | "At Risk" | "Trial" | "New";
 
@@ -25,6 +26,7 @@ export interface Message {
   author?: string;
   mentions?: string[];
   attachments?: MessageAttachment[];
+  deleted?: boolean;
 }
 
 export interface CustomerNote {
@@ -94,6 +96,7 @@ export interface Conversation {
   assignedToMe: boolean;
   assignedAgent?: { id: string; name: string; assignedById: string; assignedByName: string; assignedAt: string } | null;
   intercomAssignee?: { id: string | number; name?: string; email?: string; type?: string } | null;
+  sla?: { name: string | null; firstReplyBreached: boolean; nextReplyBreached: boolean; remainingSeconds: number | null; breachedAt: number | null } | null;
   createdByMe?: boolean;
   createdByAdmin?: { id: string; name: string } | null;
   messages: Message[];
@@ -101,6 +104,9 @@ export interface Conversation {
   slaMinutes: number;
   firstResponsePending: boolean;
   priorityScore: number;
+  isHighPriority?: boolean;
+  priorityLevel?: PriorityLevel;
+  updatedAtTs?: number;
   viewers?: string[];
   triggerFlags?: string[];
   tags?: { id: string; name: string }[];

@@ -97,6 +97,21 @@ function ConversationPageContent() {
       onStatusChange={handleStatusChange}
       onTagsChange={(tags) => patchConversation(id, { tags })}
       onSnooze={handleSnooze}
+      onPriorityChange={(level) => {
+        const TIER_SCORE: Record<string, number> = { Platinum: 40, Gold: 30, Silver: 20, New: 10 };
+        let score = TIER_SCORE[conversation.customer?.tier ?? 'New'] ?? 10;
+        if (conversation.sla?.firstReplyBreached || conversation.sla?.nextReplyBreached) score += 30;
+        if ((conversation.waitMinutes ?? 0) > 0 && (conversation.slaMinutes ?? 0) > 0 && conversation.waitMinutes / conversation.slaMinutes >= 1) score += 20;
+        if (conversation.firstResponsePending) score += 10;
+        if (level === 'high' || level === 'urgent') score = Math.max(score, 90);
+        else if (level === 'medium') score = Math.max(score, 60);
+        else if (level === 'low') score = Math.max(score, 30);
+        patchConversation(id, {
+          priorityLevel: level,
+          isHighPriority: level === 'high' || level === 'urgent',
+          priorityScore: Math.min(score, 100),
+        });
+      }}
       highlightMessageId={highlightMessageId}
       searchQuery={searchQuery}
     />
