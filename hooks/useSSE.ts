@@ -10,6 +10,8 @@ interface SSEHandlers {
   onPermissionsUpdated?: (authToken: string) => void;
   onAuditLogNew?: (log: any) => void;
   onAgentUpdated?: (agent: { id: string; firstName: string; lastName: string | null; email: string; role: string; status: string }) => void;
+  onPriorityUpdate?: (payload: { conversationId: string; priorityLevel: string }) => void;
+  onMacrosUpdated?: () => void;
 }
 
 export function useSSE(handlers: SSEHandlers) {
@@ -59,6 +61,17 @@ export function useSSE(handlers: SSEHandlers) {
           const agent = JSON.parse(e.data);
           handlersRef.current.onAgentUpdated?.(agent);
         } catch {}
+      });
+
+      es.addEventListener("priority:update", (e: MessageEvent) => {
+        try {
+          const payload = JSON.parse(e.data);
+          handlersRef.current.onPriorityUpdate?.(payload);
+        } catch {}
+      });
+
+      es.addEventListener("macros:updated", () => {
+        handlersRef.current.onMacrosUpdated?.();
       });
 
       es.onerror = () => {

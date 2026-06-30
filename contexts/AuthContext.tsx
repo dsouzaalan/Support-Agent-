@@ -6,6 +6,7 @@ import {
   useState,
   useEffect,
   useCallback,
+  useRef,
   ReactNode,
 } from "react";
 import { api } from "@/lib/api";
@@ -71,6 +72,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  // Ref so the SSE callback always sees the current user without being recreated
+  const userRef = useRef<AuthUser | null>(null);
+  useEffect(() => { userRef.current = user; }, [user]);
+
   useEffect(() => {
     const { user: u, token: t } = readStoredAuth();
     setUser(u);
@@ -82,6 +87,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     onPermissionsUpdated: useCallback((authToken: string) => {
       const u = decodeJwtUser(authToken);
       if (!u) return;
+      // Never apply another user's token — this session belongs to userRef.current only
+      if (userRef.current && u.id !== userRef.current.id) return;
       if (u.status === 'deactivated') {
         localStorage.removeItem("auth_token");
         document.cookie = "auth-session=; path=/; max-age=0";

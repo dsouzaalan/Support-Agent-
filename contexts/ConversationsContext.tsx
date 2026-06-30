@@ -31,6 +31,7 @@ interface ConversationsContextValue {
   latestUpdate: Conversation | null;
   composingContact: ComposingContact | null;
   setComposingContact: (c: ComposingContact | null) => void;
+  macrosVersion: number;
 }
 
 const ConversationsContext = createContext<ConversationsContextValue | null>(null);
@@ -40,6 +41,7 @@ export function ConversationsProvider({ children }: { children: React.ReactNode 
   const [clickupLinks, setClickupLinks] = useState<Record<string, ClickUpLink>>({});
   const [latestUpdate, setLatestUpdate] = useState<Conversation | null>(null);
   const [composingContact, setComposingContact] = useState<ComposingContact | null>(null);
+  const [macrosVersion, setMacrosVersion] = useState(0);
 
   // Keep a ref to conversations so SSE callbacks can compare prev vs new without stale closures
   const conversationsRef = useRef(conversations);
@@ -70,11 +72,17 @@ export function ConversationsProvider({ children }: { children: React.ReactNode 
       // Wait one tick so the new token is in place before we refetch with updated permissions.
       setTimeout(() => refetch(), 100);
     }, [refetch]),
+    onPriorityUpdate: useCallback(({ conversationId, priorityLevel }: { conversationId: string; priorityLevel: string }) => {
+      patchConversation(conversationId, { priorityLevel: priorityLevel as any });
+    }, [patchConversation]),
+    onMacrosUpdated: useCallback(() => {
+      setMacrosVersion((v) => v + 1);
+    }, []),
   });
 
   return (
     <ConversationsContext.Provider
-      value={{ conversations, loading, loadingMore, hasMore, error, refetch, fetchNextPage, upsertConversation, setLocalStatus, patchConversation, clickupLinks, linkClickup, latestUpdate, composingContact, setComposingContact }}
+      value={{ conversations, loading, loadingMore, hasMore, error, refetch, fetchNextPage, upsertConversation, setLocalStatus, patchConversation, clickupLinks, linkClickup, latestUpdate, composingContact, setComposingContact, macrosVersion }}
     >
       {children}
     </ConversationsContext.Provider>

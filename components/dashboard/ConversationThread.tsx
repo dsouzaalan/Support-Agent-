@@ -7,6 +7,7 @@ import { suggestedMcp } from "@/lib/mock-data";
 import { api } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { usePermissions } from "@/hooks/usePermissions";
+import { useConversationsContext } from "@/contexts/ConversationsContext";
 import {
   Sparkles, SendHorizonal, Wand2, ExternalLink,
   AlertTriangle, CheckCheck, MoreHorizontal, UserPlus, Languages,
@@ -122,6 +123,7 @@ const SNOOZE_OPTIONS = [
 export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl, onLinkClickup, onStatusChange, onTagsChange, onSnooze, onPriorityChange, highlightMessageId, searchQuery }: ThreadProps) {
   const { user } = useAuth();
   const { can } = usePermissions();
+  const { macrosVersion } = useConversationsContext();
   const currentUserName = user ? `${user.firstName} ${user.lastName ?? ""}`.trim() : "Agent";
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
@@ -370,14 +372,18 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
     return () => clearTimeout(t);
   }, [resolvedHighlightId, localMessages]);
 
-  // Load tags, macros, articles once on mount
+  // Load tags and articles once on mount
   useEffect(() => {
     api.tags.list().then((res) => setAllTags(res.data ?? [])).catch(() => {});
-    setMacrosLoading(true);
-    api.macros.list().then((res) => setMacros(res.data ?? [])).catch(() => {}).finally(() => setMacrosLoading(false));
     setArticlesLoading(true);
     api.articles.list({ perPage: 20 }).then((res) => setArticles(res.data?.articles ?? [])).catch(() => {}).finally(() => setArticlesLoading(false));
   }, []);
+
+  // Reload macros whenever admin creates/updates/deletes one (macrosVersion bumps via SSE)
+  useEffect(() => {
+    setMacrosLoading(true);
+    api.macros.list().then((res) => setMacros(res.data ?? [])).catch(() => {}).finally(() => setMacrosLoading(false));
+  }, [macrosVersion]);
 
   // Thread keyboard shortcuts — only fire when not typing in an input/textarea
   useEffect(() => {
