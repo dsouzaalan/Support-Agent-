@@ -398,7 +398,7 @@ export function ConversationList({ conversations, selectedId, onSelect, agentNam
         </div>
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium">{agentName}</div>
-          <div className="text-[11px] text-muted-foreground">Online · 6h 12m today</div>
+          <div className="text-[11px] text-muted-foreground">Online</div>
         </div>
       </div>
 

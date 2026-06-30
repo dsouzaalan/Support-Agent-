@@ -1160,7 +1160,7 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
       {conversation.status === "pending" && conversation.snoozedUntil && (
         <div className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-300 md:px-6">
           <BellOff className="h-3.5 w-3.5 shrink-0" />
-          <span>
+          <span className="flex-1">
             Snoozed until{" "}
             <strong>
               {new Date(conversation.snoozedUntil * 1000).toLocaleString(undefined, {
@@ -1168,6 +1168,12 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
               })}
             </strong>
           </span>
+          <button
+            onClick={() => { onStatusChange?.("open"); toast.success("Conversation unsnoozed"); }}
+            className="ml-2 rounded-md border border-amber-300 bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800 hover:bg-amber-200 dark:border-amber-700 dark:bg-amber-900/40 dark:text-amber-300 dark:hover:bg-amber-900/60"
+          >
+            Unsnooze
+          </button>
         </div>
       )}
 
