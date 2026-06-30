@@ -28,10 +28,6 @@ export function CustomerPanel({ customer, clickupTicket, conversationTags, assig
   conversationId?: string;
 }) {
   const [tags, setTags] = useState<string[]>(customer.tags);
-  const [notes, setNotes] = useState<CustomerNote[]>(customer.notes);
-
-  // Sync notes when the conversation changes (different customer)
-  useEffect(() => { setNotes(customer.notes); }, [customer.id]);
 
   return (
     <aside className="flex w-full flex-col overflow-y-auto border-l border-border bg-card">
@@ -43,7 +39,7 @@ export function CustomerPanel({ customer, clickupTicket, conversationTags, assig
       <Destinations customer={customer} />
       <AccountHealth customer={customer} />
       <SentimentRisk customer={customer} conversationId={conversationId} />
-      <Notes notes={notes} setNotes={setNotes} contactId={customer.id} />
+      <Notes contactId={customer.id} conversationId={conversationId} />
       <PastConvos customer={customer} />
       <McpConsole customer={customer} conversationId={conversationId} />
       <QuickLinks customer={customer} conversationId={conversationId} />
@@ -416,10 +412,19 @@ function SentimentRisk({ customer, conversationId }: { customer: Customer; conve
   );
 }
 
-function Notes({ notes, setNotes, contactId }: { notes: CustomerNote[]; setNotes: (n: CustomerNote[]) => void; contactId: string }) {
+function Notes({ contactId, conversationId }: { contactId: string; conversationId?: string }) {
+  const [notes, setNotes] = useState<CustomerNote[]>([]);
   const [val, setVal] = useState("");
   const [adding, setAdding] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!conversationId) return;
+    setNotes([]);
+    api.conversations.getNotes(conversationId)
+      .then((res: any) => setNotes(res?.data ?? []))
+      .catch(() => {});
+  }, [conversationId]);
 
   const add = async () => {
     if (!val.trim()) return;

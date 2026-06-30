@@ -108,6 +108,7 @@ export const api = {
       return apiFetch(`/conversations${qs ? `?${qs}` : ''}`);
     },
     get: (id: string) => apiFetch(`/conversations/${id}`),
+    getNotes: (id: string) => apiFetch(`/conversations/${id}/notes`),
     reply: (id: string, body: string, type: 'comment' | 'note' = 'comment', attachments?: { filename: string; mimeType: string; base64: string }[]) =>
       apiFetch(`/conversations/${id}/reply`, { method: 'POST', body: JSON.stringify({ body, type, attachments }) }),
     updateStatus: (id: string, status: string) =>
