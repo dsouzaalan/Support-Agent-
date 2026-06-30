@@ -41,7 +41,22 @@ function ConversationPageContent() {
   }, [latestUpdate]);
 
   const listConversation = conversations.find((c) => c.id === id) ?? null;
-  const conversation = fullConversation ?? listConversation;
+  // fullConversation has message history; listConversation carries live SSE patches (priority, tags, status).
+  // Merge so SSE updates are visible without refetching the full conversation.
+  const conversation = (() => {
+    if (!fullConversation) return listConversation;
+    if (!listConversation) return fullConversation;
+    return {
+      ...fullConversation,
+      priorityLevel: listConversation.priorityLevel,
+      isHighPriority: listConversation.isHighPriority,
+      priorityScore: listConversation.priorityScore,
+      status: listConversation.status,
+      tags: listConversation.tags,
+      snoozedUntil: listConversation.snoozedUntil,
+      assignedAgent: listConversation.assignedAgent,
+    };
+  })();
 
   const handleStatusChange = useCallback(async (status: ConvStatus) => {
     if (status === "closed") {
