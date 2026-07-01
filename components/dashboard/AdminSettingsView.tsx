@@ -89,9 +89,9 @@ const PERMISSION_GROUPS: { label: string; icon: React.ReactNode; keys: string[] 
     keys: ["clickup:link"],
   },
   {
-    label: "Audit",
+    label: "Audit & Alerts",
     icon: <ClipboardList className="h-3.5 w-3.5" />,
-    keys: ["audit_logs:view"],
+    keys: ["audit_logs:view", "alerts:view"],
   },
 ];
 
@@ -112,6 +112,7 @@ const PERMISSION_LABELS: Record<string, string> = {
   "agents:deactivate":         "Deactivate agents",
   "agents:edit_permissions":   "Edit agent permissions & roles",
   "audit_logs:view":           "View audit logs",
+  "alerts:view":               "View & manage alerts settings",
   "clickup:link":              "Link & create ClickUp tasks",
 };
 
@@ -122,13 +123,13 @@ export function AdminSettingsView({ onOpenConversation }: { onOpenConversation: 
   const isAdmin = role === "admin";
 
   const tabs = [
-    { key: "alerts",   label: "Alerts",    icon: <Bell className="h-3.5 w-3.5" />,     show: true },
+    { key: "alerts",   label: "Alerts",    icon: <Bell className="h-3.5 w-3.5" />,     show: can("alerts:view") },
     { key: "agents",   label: "Agents",    icon: <Users className="h-3.5 w-3.5" />,    show: isAdmin },
     { key: "macros",   label: "Macros",    icon: <FileText className="h-3.5 w-3.5" />, show: can("macros:manage") },
     { key: "articles", label: "Articles",  icon: <BookOpen className="h-3.5 w-3.5" />, show: can("articles:manage") },
   ].filter((t) => t.show);
 
-  const [activeTab, setActiveTab] = useState(tabs[0]?.key ?? "alerts");
+  const [activeTab, setActiveTab] = useState(tabs[0]?.key ?? "");
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-background">
@@ -157,7 +158,7 @@ export function AdminSettingsView({ onOpenConversation }: { onOpenConversation: 
 
       {/* Tab content */}
       <div className="flex-1 overflow-y-auto">
-        {activeTab === "alerts"   && <AlertsTab onOpenConversation={onOpenConversation} />}
+        {activeTab === "alerts"   && can("alerts:view") && <AlertsTab onOpenConversation={onOpenConversation} />}
         {activeTab === "agents"   && <AgentsTab />}
         {activeTab === "macros"   && <MacrosTab />}
         {activeTab === "articles" && <ArticlesTab />}
