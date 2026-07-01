@@ -345,10 +345,11 @@ export function ConversationThread({ conversation, clickupTicket, clickupTaskUrl
         if (!changed && toAppend.length === 0) return prev;
         return toAppend.length > 0 ? [...updated, ...toAppend] : updated;
       });
-      // Sync assignment from SSE
+      // Sync assignment and tags from SSE
       setLocalAssignedAgent(conversation.assignedAgent ?? null);
+      setConvTags(conversation.tags ?? []);
     }
-  }, [conversation.id, conversation.messages, conversation.assignedAgent]);
+  }, [conversation.id, conversation.messages, conversation.assignedAgent, conversation.tags]);
 
   // Scroll to and ring-highlight the target message once per navigation.
   // Also depends on localMessages so it retries after the full conversation loads
