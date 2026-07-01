@@ -72,7 +72,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <div className="mt-auto flex flex-col gap-1">
           <RailBtn icon={<Keyboard className="h-4 w-4" />} label="Keyboard shortcuts [?]" onClick={() => setShowShortcuts(true)} />
           <RailBtn icon={<HelpCircle className="h-4 w-4" />} label="Help" />
-          {(can("macros:manage") || can("tags:manage") || can("articles:manage") || isAdmin) && (
+          {(can("alerts:view") || can("macros:manage") || can("articles:manage") || isAdmin) && (
             <RailBtn active={pathname.startsWith("/settings")} onClick={() => router.push("/settings")} icon={<Settings className="h-4 w-4" />} label="Settings [⌘5]" />
           )}
           <RailBtn icon={<LogOut className="h-4 w-4" />} label="Sign Out" onClick={handleSignOut} />
